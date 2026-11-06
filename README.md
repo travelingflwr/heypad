@@ -55,6 +55,7 @@ the app is made of:
 | **Floating mail** | `heypad float`, or **⌘⇧M** from any tab, shows HEY as a floating window over your work. Press it again (or Esc) and it tucks away. |
 | **Floating compose** | `r` (reply) and `c` (new message) float a pane with your editor. You see what you wrote and choose send, edit, draft, or cancel. Nothing sends without that choice. The pane closes itself and the thread refreshes. |
 | **Ask Claude** | `a` floats [Claude Code](https://claude.com/claude-code) over the window with the thread in hand: a summary, what you need to do, and a reply drafted for your approval. |
+| **Triage with Claude** | `A` hands Claude all of New For You. Its verdicts (*Needs you*, *Worth a read*, *Skip*) appear on the rows in heypad as it writes them, and it marks threads seen only once you've approved which. |
 | **Command palette** | *HEY: Toggle Mail*, *HEY: New Message*, *HEY: Open Mail Tab*. |
 | **A pane beside you** | `heypad show` docks HEY next to your terminal, like a sidebar. |
 | **Any machine** | It's plain Go, so it builds for Linux too. Run it on any host you reach through Rex and it draws in the Rex app in front of you. |
@@ -95,9 +96,13 @@ heypad view           # run it in this pane
 | --- | --- |
 | `j` `k` `↑` `↓` | move, or scroll a thread |
 | `Enter` `o` | open the thread |
-| `Esc` `h` | back to the list; on the list, minimize the floating window |
+| `Esc` `h` | back to the list; on the list, clear marks or minimize the floating window |
 | `Tab` `1`–`6` | switch boxes |
 | `s` | in the Imbox, only what's new, or both sections |
+| `x` | mark a thread (and move down) |
+| `X` | mark this thread and every new one below it |
+| `e` | mark seen: the marked threads, or this one, after a yes |
+| `A` | triage New For You with Claude |
 | `n` `p` | next or previous thread |
 | `r` | reply |
 | `c` | new message |
@@ -129,6 +134,10 @@ Clicking a thread opens it; clicking the header goes back.
 
 - heypad talks only to HEY, through the `hey` CLI, and to Rex. It keeps
   cached mail in `~/.local/state/heypad` (readable only by you).
+- **Triage** gives Claude each new thread's sender, subject and preview,
+  tells it to treat them as untrusted data, and lets it mark threads seen
+  only after you approve exactly which. It can't send, reply, delete or move
+  mail.
 - **Ask Claude** writes the thread to a file in that folder and tells Claude
   to treat the email as untrusted data, never as instructions, and to send a
   reply only after you approve its exact text. Set `HEYPAD_AGENT` to use a

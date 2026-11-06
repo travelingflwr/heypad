@@ -40,6 +40,9 @@ In the viewer
   n p          next/previous thread       R   refresh      q   quit
   s            in the Imbox: only what's new, or both sections
                (the floating window starts with only what's new)
+  x            mark a thread     X   mark it and every new one below
+  e            mark seen (the marked ones, or this one), after a yes
+  A            triage New For You with Claude
 
 Mail comes from the hey CLI (https://github.com/basecamp/hey-cli); sign in
 with it first.
@@ -132,6 +135,7 @@ func runRender(args []string) error {
 	fresh := fs.Int("fresh", -1, "mark the first N threads New For You (-1: as HEY has them)")
 	floating := fs.Bool("floating", false, "draw only what's new, as the floating window does")
 	demo := fs.Bool("demo", false, "draw a made-up mailbox instead of yours, for screenshots")
+	fs.Int("marked", 0, "draw the first N rows marked, as for a bulk mark-seen")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -162,6 +166,10 @@ func runRender(args []string) error {
 		}
 	}
 	r := &renderer{fonts: fonts, scale: *scale, pal: pal, now: time.Now()}
+	if *demo {
+		r.triage = demoTriage()
+	}
+	marks := fs.Lookup("marked").Value.(flag.Getter).Get().(int)
 	wPx, hdrPx := int(*width**scale), int(headerPt**scale)
 	img := image.NewRGBA(image.Rect(0, 0, wPx, int(*height**scale)))
 	r.paint(img)
@@ -220,6 +228,9 @@ func runRender(args []string) error {
 			r.selection(bImg, lay.tops[*sel])
 		}
 		r.drawList(bImg, shown, lay, 0, "All caught up", *floating && len(shown) == 0)
+		for i := 0; i < marks && i < len(shown); i++ {
+			r.markBadge(bImg, padX+avatarR, lay.tops[i]+30)
+		}
 	}
 	copyInto(img, hImg, 0)
 	copyInto(img, bImg, hdrPx)

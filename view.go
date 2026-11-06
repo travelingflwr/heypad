@@ -59,6 +59,8 @@ const (
 	resThread
 	resWrite
 	resNote
+	resSeen    // a bulk mark-seen finished
+	resRefresh // something outside (the triage agent) may have changed the box
 )
 
 type result struct {
@@ -70,6 +72,7 @@ type result struct {
 	err     error
 	ok      bool
 	msg     string
+	ids     []int64
 }
 
 // geom is the pane's size and how it's divided: a header of whole rows at
@@ -229,6 +232,18 @@ func runView(opt viewOptions) error {
 		// back to the list (HEY already has it as seen).
 		pendingRead int64
 
+		// Bulk mark seen: the marked threads (by box item ID), and the ones
+		// waiting on a yes while confirming.
+		marked      = map[int64]bool{}
+		confirmSeen []int64
+		markIDs     []int // the check images over marked avatars
+		markKey     string
+
+		// Triage: an agent's verdicts, reloaded when its file changes.
+		triage      = loadTriage()
+		triageVer   int
+		triageStamp string
+
 		// For debug snapshots: the last header and selection images, and
 		// the view row the selection's image starts on.
 		hdrImg, hlImg *image.RGBA
@@ -279,8 +294,8 @@ func runView(opt viewOptions) error {
 	}
 	// readNow moves a thread out of New For You, to the top of Previously
 	// Seen, the way HEY files it once it's seen.
-	readNow := func(id int64) {
-		list := posts[kind()]
+	readNow := func(k string, id int64) {
+		list := posts[k]
 		i := slices.IndexFunc(list, func(p Posting) bool { return p.ID == id })
 		if i < 0 || !list[i].New {
 			return
@@ -292,8 +307,8 @@ func runView(opt viewOptions) error {
 		for at < len(list) && list[at].New {
 			at++
 		}
-		posts[kind()] = slices.Insert(list, at, p)
-		vers[kind()]++
+		posts[k] = slices.Insert(list, at, p)
+		vers[k]++
 	}
 	sel := func() int {
 		n := len(cur())
@@ -360,6 +375,8 @@ func runView(opt viewOptions) error {
 			note = "Couldn't load this thread: " + th.err
 		} else if th.loading && len(th.entries) == 0 {
 			note = "Loading…"
+		} else if t, ok := triage[th.post.ID]; ok && t.Why != "" {
+			note = "Claude: " + triageLabels[t.Label] + ". " + t.Why
 		}
 		entries := th.entries
 		if len(entries) == 0 {
@@ -382,7 +399,7 @@ func runView(opt viewOptions) error {
 		return math.Max(0, contentHeight(r, g)-g.viewH())
 	}
 	newRenderer := func(g geom) *renderer {
-		return &renderer{fonts: fonts, scale: g.scale, pal: drawPal(), clear: clear, now: time.Now()}
+		return &renderer{fonts: fonts, scale: g.scale, pal: drawPal(), clear: clear, now: time.Now(), triage: triage}
 	}
 
 	// keepSelVisible scrolls the list so the selected row shows with some
@@ -432,7 +449,15 @@ func runView(opt viewOptions) error {
 				h.right = "Tab next box   c compose"
 			}
 		}
-		if status != "" && time.Now().Before(statusUntil) {
+		if screen == screenList {
+			switch {
+			case confirmSeen != nil:
+				h.right, h.rightRole = fmt.Sprintf("Mark %d seen?   y yes   n no", len(confirmSeen)), roleAccent
+			case len(marked) > 0:
+				h.right, h.rightRole = fmt.Sprintf("%d marked   e mark seen   Esc clear", len(marked)), roleAccent
+			}
+		}
+		if status != "" && time.Now().Before(statusUntil) && confirmSeen == nil {
 			h.right, h.rightRole = status, statusRole
 		}
 		return h
@@ -493,7 +518,7 @@ func runView(opt viewOptions) error {
 			threadDoc(r, g)
 			ck = fmt.Sprint("t", docKey, pal)
 		} else {
-			ck = fmt.Sprint("l", kind(), vers[kind()], showAll, loading[kind()] && len(cur()) == 0, errs[kind()], pal, g, time.Now().Format("2006-01-02 15:04"))
+			ck = fmt.Sprint("l", kind(), vers[kind()], showAll, triageVer, loading[kind()] && len(cur()) == 0, errs[kind()], pal, g, time.Now().Format("2006-01-02 15:04"))
 		}
 		if force || ck != sheetKey || offsetPx < sheetTop || offsetPx+g.viewPx > sheetTop+sheetH {
 			// The sheet can start above the content (a negative offset) while
@@ -604,6 +629,46 @@ func runView(opt viewOptions) error {
 			hlID, hlKey = 0, ""
 		}
 
+		// Marked threads: a check over each avatar in view, each a small
+		// image over the sheet, so marking never redraws the list.
+		type spot struct {
+			r0, r1, c1 int
+			cy         float64 // the avatar's center, in the image, in points
+		}
+		var spots []spot
+		if screen == screenList && len(marked) > 0 {
+			l := lay()
+			c1 := min(g.ws.cols, int(math.Ceil((padX+2*avatarR+2)*g.scale/float64(g.cellW))))
+			for i, p := range cur() {
+				if !marked[p.ID] {
+					continue
+				}
+				cy := (l.tops[i]+30)*g.scale - float64(offsetPx) // view pixels
+				top, bot := cy-(avatarR+1)*g.scale, cy+(avatarR+1)*g.scale
+				if bot <= 0 || top >= float64(g.viewPx) {
+					continue
+				}
+				r0, r1 := max(0, int(top)/g.cellH), min(g.rows, int(math.Ceil(bot/float64(g.cellH))))
+				if r1 > r0 {
+					spots = append(spots, spot{r0, r1, c1, (cy - float64(r0*g.cellH)) / g.scale})
+				}
+			}
+		}
+		if key := fmt.Sprint(spots, pal, g); force || key != markKey {
+			var ids []int
+			for _, sp := range spots {
+				img := image.NewRGBA(image.Rect(0, 0, sp.c1*g.cellW, (sp.r1-sp.r0)*g.cellH))
+				r.markBadge(img, padX+avatarR, sp.cy)
+				id := nextID
+				nextID++
+				kittyUpload(w, img, id)
+				kittyPlace(w, id, g.hdrRows+1+sp.r0, 1, 0, sp.c1*g.cellW, (sp.r1-sp.r0)*g.cellH, sp.c1, sp.r1-sp.r0, 1)
+				ids = append(ids, id)
+			}
+			drop = append(drop, markIDs...)
+			markIDs, markKey = ids, key
+		}
+
 		for _, id := range drop {
 			if id != 0 {
 				kittyDelete(w, id)
@@ -674,7 +739,7 @@ func runView(opt viewOptions) error {
 	// next new thread.
 	settleRead := func() {
 		if pendingRead != 0 {
-			readNow(pendingRead)
+			readNow(kind(), pendingRead)
 			pendingRead = 0
 		}
 	}
@@ -792,6 +857,52 @@ func runView(opt viewOptions) error {
 		}()
 	}
 
+	// markedIDs are the marked threads still in the box, in list order.
+	markedIDs := func() []int64 {
+		var ids []int64
+		for _, p := range posts[kind()] {
+			if marked[p.ID] {
+				ids = append(ids, p.ID)
+			}
+		}
+		return ids
+	}
+	confirmed := func() {
+		ids := confirmSeen
+		confirmSeen = nil
+		setStatus(fmt.Sprintf("Marking %d seen…", len(ids)), roleFaint)
+		draw(false)
+		go func() {
+			results <- result{kind: resSeen, box: kind(), ids: ids, err: markSeenIDs(ids)}
+		}()
+	}
+	triageNow := func() {
+		if !inRex() {
+			setStatus("Triage opens in a Rex floating pane", roleGray)
+			draw(false)
+			return
+		}
+		if newIn("imbox") == 0 {
+			setStatus("Nothing new to triage", roleFaint)
+			draw(false)
+			return
+		}
+		block, err := triageAgent(posts["imbox"])
+		if err != nil {
+			setStatus(err.Error(), roleGray)
+			draw(false)
+			return
+		}
+		triage, triageStamp = map[int64]TriageItem{}, ""
+		triageVer++
+		setStatus("Claude is triaging New For You…", roleAccent)
+		draw(false)
+		go func() {
+			waitBlock(block)
+			results <- result{kind: resRefresh, box: "imbox"}
+		}()
+	}
+
 	handleKey := func(k keyPress) bool {
 		g := lastGeom
 		page := math.Max(rowPitch, g.viewH()-rowPitch)
@@ -803,6 +914,16 @@ func runView(opt viewOptions) error {
 		if k.is('m', modSuper|modShift) || k.is('M', modSuper|modShift) || k.is('M', modSuper) {
 			if opt.floating {
 				minimizeSelf()
+			}
+			return false
+		}
+		if confirmSeen != nil {
+			switch {
+			case k.is('y', 0) || k.is(keyEnter, 0):
+				confirmed()
+			case k.is('n', 0) || k.is(keyEscape, 0) || k.is('q', 0):
+				confirmSeen = nil
+				draw(false)
 			}
 			return false
 		}
@@ -846,9 +967,46 @@ func runView(opt viewOptions) error {
 		case k.is('q', 0):
 			return true
 		case k.is(keyEscape, 0):
-			if opt.floating {
+			if len(marked) > 0 {
+				marked = map[int64]bool{}
+				draw(false)
+			} else if opt.floating {
 				minimizeSelf()
 			}
+		case k.is('x', 0) && kind() == "imbox":
+			if p, ok := selected(); ok {
+				if marked[p.ID] {
+					delete(marked, p.ID)
+				} else {
+					marked[p.ID] = true
+				}
+				if sel() < len(cur())-1 {
+					moveSel(1)
+				} else {
+					draw(false)
+				}
+			}
+		case (k.is('X', 0) || k.is('x', modShift)) && kind() == "imbox":
+			// This one and every new thread below it: older than here.
+			for _, p := range cur()[sel():] {
+				if p.New {
+					marked[p.ID] = true
+				}
+			}
+			draw(false)
+		case k.is('e', 0) && kind() == "imbox":
+			ids := markedIDs()
+			if len(ids) == 0 {
+				if p, ok := selected(); ok && p.New {
+					ids = []int64{p.ID}
+				}
+			}
+			if len(ids) > 0 {
+				confirmSeen = ids
+				draw(false)
+			}
+		case k.is('A', 0) || k.is('a', modShift):
+			triageNow()
 		case k.is('j', 0) || k.is(keyDown, 0):
 			moveSel(1)
 		case k.is('k', 0) || k.is(keyUp, 0):
@@ -948,6 +1106,14 @@ func runView(opt viewOptions) error {
 			if status != "" && time.Now().After(statusUntil) {
 				status = ""
 			}
+			stamp := ""
+			if st, err := os.Stat(triagePath()); err == nil {
+				stamp = fmt.Sprint(st.ModTime().UnixNano(), st.Size())
+			}
+			if stamp != triageStamp {
+				triageStamp, triage = stamp, loadTriage()
+				triageVer++
+			}
 			draw(false)
 		case <-refresh.C:
 			fetchBoxAsync(kind())
@@ -1033,6 +1199,23 @@ func runView(opt viewOptions) error {
 				}
 			case resNote:
 				setStatus(res.msg, roleGray)
+			case resSeen:
+				if res.err != nil {
+					setStatus("Couldn't mark them seen: "+res.err.Error(), roleGray)
+					break
+				}
+				for _, id := range res.ids {
+					readNow(res.box, id)
+					delete(marked, id)
+				}
+				setStatus(fmt.Sprintf("Marked %d seen", len(res.ids)), roleAccent)
+				if res.box == kind() {
+					sels[kind()] = min(sel(), max(0, len(cur())-1))
+					keepSelVisible()
+				}
+				setTitle()
+			case resRefresh:
+				fetchBoxAsync(res.box)
 			}
 			draw(false)
 		case ev, open := <-events:

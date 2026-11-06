@@ -134,6 +134,48 @@ type renderer struct {
 	pal   palette
 	clear bool // leave the background transparent
 	now   time.Time
+	// triage is an agent's verdict on threads, by box item ID, shown as a
+	// chip on each row.
+	triage map[int64]TriageItem
+}
+
+// tinted is c at opacity a over the background: see-through on a clear
+// image, mixed on a painted one. The two look the same.
+func (r *renderer) tinted(c color.RGBA, a float64) color.RGBA {
+	if r.clear {
+		return premul(c, a)
+	}
+	return mix(c, r.pal.bg, 1-a)
+}
+
+var triageLabels = map[string]string{"needs_you": "Needs you", "read": "Worth a read", "skip": "Skip"}
+
+// chip draws a triage label ending at x, centered on cy, and returns its width.
+func (r *renderer) chip(img *image.RGBA, label string, x, cy float64) float64 {
+	text := triageLabels[label]
+	bg, fg, bold := r.tinted(r.pal.text, 0.08), r.pal.gray, false
+	switch label {
+	case "needs_you":
+		bg, fg, bold = r.tinted(r.pal.accent, 0.2), r.pal.accent, true
+	case "skip":
+		bg, fg = r.tinted(r.pal.text, 0.05), r.pal.faint
+	}
+	tw := r.width(text, 10.5, bold)
+	w := tw + 12
+	r.fillRoundRect(img, x-w, cy-8, x, cy+8, 8, bg)
+	r.drawRaw(img, text, x-w+6, cy+3.8, 10.5, bold, fg)
+	return w
+}
+
+// markBadge covers a row's avatar with a check, for a thread marked to be
+// seen.
+func (r *renderer) markBadge(img *image.RGBA, cx, cy float64) {
+	r.fillCircle(img, cx, cy, avatarR, r.pal.accent)
+	white := rgb(255, 255, 255)
+	if luminance(r.pal.accent) > 0.5 {
+		white = rgb(20, 20, 20)
+	}
+	r.check(img, cx, cy, 13, white)
 }
 
 func (r *renderer) paint(img *image.RGBA) {
@@ -549,6 +591,9 @@ func (r *renderer) postRow(img *image.RGBA, p Posting, y0, widthPt float64, last
 	if fresh {
 		r.fillCircle(img, right-dw-8, y0+19, 3.5, r.pal.accent)
 		dw += 13
+	}
+	if t, ok := r.triage[p.ID]; ok && right-dw-rowTextX > 150 {
+		dw += r.chip(img, t.Label, right-dw-8, y0+19) + 8
 	}
 	nameMax := right - rowTextX - dw - 10
 	nw := r.text(img, p.sender(), rowTextX, y0+23, 13.5, true, r.pal.text, nameMax)

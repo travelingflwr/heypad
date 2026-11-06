@@ -472,3 +472,87 @@ func shortDate(t, now time.Time) string {
 	}
 	return t.Format("Jan 2, 2006")
 }
+
+// markSeenIDs marks many box items seen, a batch per call.
+func markSeenIDs(ids []int64) error {
+	for len(ids) > 0 {
+		n := min(50, len(ids))
+		args := []string{"seen"}
+		for _, id := range ids[:n] {
+			args = append(args, fmt.Sprint(id))
+		}
+		if _, err := heyJSON(args...); err != nil {
+			return err
+		}
+		ids = ids[n:]
+	}
+	return nil
+}
+
+// --- triage ---------------------------------------------------------------
+
+// Triage is what an agent made of New For You, written to triageFile while
+// it works; heypad shows each verdict on the thread's row.
+type Triage struct {
+	Threads map[string]TriageItem `json:"threads"` // by box item ID
+}
+
+type TriageItem struct {
+	Label string `json:"label"` // needs_you, read, or skip
+	Why   string `json:"why"`
+}
+
+const (
+	triageFile    = "triage.json"
+	triageNewFile = "new-for-you.json"
+)
+
+func triagePath() string { return filepath.Join(stateDir(), triageFile) }
+
+// loadTriage reads the triage file; a missing or half-written one is empty.
+func loadTriage() map[int64]TriageItem {
+	var t Triage
+	out := map[int64]TriageItem{}
+	if !readCache(triageFile, &t) {
+		return out
+	}
+	for k, v := range t.Threads {
+		var id int64
+		if _, err := fmt.Sscan(k, &id); err == nil {
+			switch v.Label {
+			case "needs_you", "read", "skip":
+				out[id] = v
+			}
+		}
+	}
+	return out
+}
+
+// triageInput is New For You as the agent gets it: enough to sort by,
+// with the IDs it needs to look closer or mark seen.
+type triageInput struct {
+	BoxItemID int64     `json:"box_item_id"`
+	ThreadID  int64     `json:"thread_id"`
+	From      string    `json:"from"`
+	Email     string    `json:"email"`
+	Subject   string    `json:"subject"`
+	Preview   string    `json:"preview"`
+	When      time.Time `json:"when"`
+	Messages  int       `json:"messages"`
+}
+
+func writeTriageInput(posts []Posting) (string, error) {
+	var in []triageInput
+	for _, p := range posts {
+		if p.New {
+			in = append(in, triageInput{p.ID, p.TopicID, p.sender(), p.Creator.Email, p.Subject, inline(p.Summary), p.ActiveAt, p.Count})
+		}
+	}
+	data, err := json.MarshalIndent(in, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	os.MkdirAll(stateDir(), 0o700)
+	path := filepath.Join(stateDir(), triageNewFile)
+	return path, os.WriteFile(path, data, 0o600)
+}

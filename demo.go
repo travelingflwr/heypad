@@ -56,3 +56,12 @@ func demoThread(p Posting) []Entry {
 	}
 	return []Entry{last}
 }
+
+// demoTriage is a made-up triage of the demo mailbox's new threads.
+func demoTriage() map[int64]TriageItem {
+	return map[int64]TriageItem{
+		1000: {"needs_you", "Confirm you'll grab the trail map"},
+		1001: {"skip", "Shipping notice"},
+		1002: {"needs_you", "Pick a contractor this week"},
+	}
+}
