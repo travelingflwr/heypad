@@ -395,21 +395,91 @@ func (r *renderer) avatar(img *image.RGBA, c Contact, name string, cx, cy, rad f
 
 // --- the box list -------------------------------------------------------
 
-func listHeight(n int) float64 {
-	if n == 0 {
-		return 0
-	}
-	return listTop + float64(n)*rowPitch + 8
+const sectionH = 30.0 // a section's heading, above its first row
+
+// listLayout is where each thread's row sits, and the section headings.
+type listLayout struct {
+	tops   []float64 // each row's top, by index into the posts drawn
+	heads  []listHead
+	height float64
 }
 
-func rowTop(i int) float64 { return listTop + float64(i)*rowPitch }
+type listHead struct {
+	y     float64 // the heading's top
+	title string
+	count int
+}
+
+// layoutList places rows, grouped under New For You and Previously Seen
+// headings when sections is set (the Imbox in a full window).
+func layoutList(posts []Posting, sections bool) listLayout {
+	var l listLayout
+	y := listTop
+	inNew := -1 // which section the last row was in, -1 before any
+	nNew := 0
+	for _, p := range posts {
+		if p.New {
+			nNew++
+		}
+	}
+	for _, p := range posts {
+		section := 0
+		if p.New {
+			section = 1
+		}
+		if sections && section != inNew {
+			if inNew != -1 {
+				y += 6
+			}
+			h := listHead{y: y, title: "Previously Seen", count: len(posts) - nNew}
+			if p.New {
+				h.title, h.count = "New For You", nNew
+			}
+			l.heads = append(l.heads, h)
+			y += sectionH
+			inNew = section
+		}
+		l.tops = append(l.tops, y)
+		y += rowPitch
+	}
+	if len(posts) > 0 {
+		l.height = y + 8
+	}
+	return l
+}
+
+// rowAt is the row under y points down the content, or -1.
+func (l listLayout) rowAt(y float64) int {
+	for i, t := range l.tops {
+		if y >= t && y < t+rowPitch {
+			return i
+		}
+	}
+	return -1
+}
 
 // drawList draws the rows that fall in the image, with the content scrolled
-// down by offset points. msg shows when there are no rows.
-func (r *renderer) drawList(img *image.RGBA, posts []Posting, offset float64, msg string, isNew func(Posting) bool) {
+// down by offset points. msg shows when there are no rows; done draws it as
+// the all-caught-up state.
+func (r *renderer) drawList(img *image.RGBA, posts []Posting, lay listLayout, offset float64, msg string, done bool) {
 	widthPt := float64(img.Bounds().Dx()) / r.scale
 	viewH := float64(img.Bounds().Dy()) / r.scale
 	if len(posts) == 0 {
+		if done {
+			// A check in a ring, and the message under it.
+			cx, cy := widthPt/2, math.Max(70, viewH*0.3)-offset
+			p := r.path(img)
+			p.poly(arc(nil, cx, cy, 22, 0, 2*math.Pi))
+			p.poly(reversed(arc(nil, cx, cy, 20.5, 0, 2*math.Pi)))
+			p.fill(r.pal.accent)
+			r.check(img, cx, cy, 9, r.pal.accent)
+			w := r.width(r.clean(msg, true), 15, true)
+			r.drawRaw(img, r.clean(msg, true), cx-w/2, cy+50, 15, true, r.pal.text)
+			sub := "Nothing new in your Imbox."
+			sw := r.width(sub, 12.5, false)
+			r.drawRaw(img, sub, cx-sw/2, cy+70, 12.5, false, r.pal.gray)
+			return
+		}
 		if msg != "" {
 			for i, ln := range r.wrap(msg, 13, false, widthPt-2*padX) {
 				r.drawRaw(img, ln, padX, 34+float64(i)*19-offset, 13, false, r.pal.gray)
@@ -417,21 +487,59 @@ func (r *renderer) drawList(img *image.RGBA, posts []Posting, offset float64, ms
 		}
 		return
 	}
-	first := max(0, int((offset-listTop)/rowPitch)-1)
-	for i := first; i < len(posts); i++ {
-		y0 := rowTop(i) - offset
+	for _, h := range lay.heads {
+		y := h.y - offset
+		if y < -sectionH || y > viewH {
+			continue
+		}
+		title := strings.ToUpper(h.title)
+		tw := r.drawRaw(img, r.clean(title, true), padX, y+20, 11, true, r.pal.gray)
+		r.drawRaw(img, strconv.Itoa(h.count), padX+tw+7, y+20, 11, false, r.pal.faint)
+	}
+	for i, p := range posts {
+		y0 := lay.tops[i] - offset
+		if y0 < -rowPitch {
+			continue
+		}
 		if y0 > viewH {
 			break
 		}
-		r.postRow(img, posts[i], y0, widthPt, i == len(posts)-1, isNew != nil && isNew(posts[i]))
+		// No divider under a section's last row.
+		last := i == len(posts)-1 || posts[i+1].New != p.New && len(lay.heads) > 1
+		r.postRow(img, p, y0, widthPt, last, p.New)
 	}
+}
+
+func reversed(pts [][2]float64) [][2]float64 {
+	out := make([][2]float64, len(pts))
+	for i, p := range pts {
+		out[len(pts)-1-i] = p
+	}
+	return out
+}
+
+// check strokes a checkmark size points wide, centered at (cx, cy).
+func (r *renderer) check(img *image.RGBA, cx, cy, size float64, col color.RGBA) {
+	pts := [][2]float64{{cx - size*0.55, cy + size*0.02}, {cx - size*0.15, cy + size*0.42}, {cx + size*0.6, cy - size*0.38}}
+	const w = 1.0
+	p := r.path(img)
+	for i := 0; i+1 < len(pts); i++ {
+		a, b := pts[i], pts[i+1]
+		dx, dy := b[0]-a[0], b[1]-a[1]
+		l := math.Hypot(dx, dy)
+		nx, ny := -dy/l*w, dx/l*w
+		ex, ey := dx/l*w*0.6, dy/l*w*0.6
+		p.poly([][2]float64{{a[0] - nx - ex, a[1] - ny - ey}, {b[0] - nx + ex, b[1] - ny + ey},
+			{b[0] + nx + ex, b[1] + ny + ey}, {a[0] + nx - ex, a[1] + ny - ey}})
+	}
+	p.fill(col)
 }
 
 func (r *renderer) postRow(img *image.RGBA, p Posting, y0, widthPt float64, last, fresh bool) {
 	right := widthPt - padX
 	r.avatar(img, p.Creator, p.sender(), padX+avatarR, y0+30, avatarR)
 
-	// New since you last opened it: the date in the accent with a dot before it.
+	// New For You: the date in the accent with a dot before it.
 	date := shortDate(p.ActiveAt, r.now)
 	dateCol := r.pal.faint
 	if fresh {

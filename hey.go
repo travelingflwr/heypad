@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,12 @@ type Posting struct {
 	Count     int       `json:"visible_entry_count"`
 	Attach    bool      `json:"includes_attachments"`
 	AppURL    string    `json:"app_url"`
+	// ObservedAt is when the thread last landed in this box section: HEY
+	// orders each section of the Imbox by it, newest first.
+	ObservedAt time.Time `json:"observed_at"`
+	// New is heypad's: the thread is in the Imbox's New For You section,
+	// which is what HEY counts as unread.
+	New bool `json:"heypad_new"`
 }
 
 func (p Posting) sender() string {
@@ -157,26 +164,112 @@ func cachedThread(topic int64) []Entry {
 	return e
 }
 
-func fetchBox(kind string) ([]Posting, error) {
-	out, err := heyJSON("box", kind, "--limit", "60")
+// boxPage is one fetch of a box: its threads, and the section ("seen" or
+// "unseen") that the next page would start in, from HEY's page cursor.
+type boxPage struct {
+	posts       []Posting
+	nextSection string
+}
+
+func fetchBoxPage(kind string, limit int) (boxPage, error) {
+	out, err := heyJSON("box", kind, "--limit", fmt.Sprint(limit))
 	if err != nil {
-		return nil, err
+		return boxPage{}, err
 	}
 	var env struct {
 		OK   bool `json:"ok"`
 		Data struct {
 			Postings []Posting `json:"postings"`
+			NextPage string    `json:"next_page"`
 		} `json:"data"`
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(out, &env); err != nil {
-		return nil, fmt.Errorf("reading hey's reply: %w", err)
+		return boxPage{}, fmt.Errorf("reading hey's reply: %w", err)
 	}
 	if !env.OK {
-		return nil, errors.New(firstNonEmpty(env.Error, "hey reported an error"))
+		return boxPage{}, errors.New(firstNonEmpty(env.Error, "hey reported an error"))
 	}
-	writeCache(boxCache(kind), env.Data.Postings)
-	return env.Data.Postings, nil
+	return boxPage{env.Data.Postings, cursorSection(env.Data.NextPage)}, nil
+}
+
+// cursorSection reads the Imbox section out of a HEY page cursor, which is
+// base64 JSON like {"page_number":2,"values":{"seen":"unseen",...}}.
+func cursorSection(cursor string) string {
+	if cursor == "" {
+		return ""
+	}
+	var data []byte
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+		if d, err := enc.DecodeString(cursor); err == nil {
+			data = d
+			break
+		}
+	}
+	var c struct {
+		Values struct {
+			Seen string `json:"seen"`
+		} `json:"values"`
+	}
+	if json.Unmarshal(data, &c) != nil {
+		return ""
+	}
+	return c.Values.Seen
+}
+
+// newCount is how many of the Imbox's first threads are in New For You.
+// The Imbox lists New For You, then Previously Seen, each newest first by
+// ObservedAt, so the one place that order goes back up is where Previously
+// Seen begins. With no such place, everything fetched is in one section,
+// and the page cursor says which (next is where the next page starts).
+func newCount(posts []Posting, next string) int {
+	for i := 1; i < len(posts); i++ {
+		if posts[i].ObservedAt.After(posts[i-1].ObservedAt) {
+			return i
+		}
+	}
+	if next == "unseen" {
+		return len(posts) // all new, and maybe more past what was fetched
+	}
+	return 0 // all caught up (or a box too small to have a next page)
+}
+
+const (
+	seenToKeep = 20  // how much of Previously Seen to fetch
+	maxNew     = 600 // the most of New For You to fetch
+)
+
+// fetchBox fetches a box. The Imbox comes back as its New For You threads,
+// all of them up to maxNew and marked New, then up to seenToKeep of
+// Previously Seen. hint is how many were new last time, to size the fetch.
+func fetchBox(kind string, hint int) ([]Posting, error) {
+	if kind != "imbox" {
+		pg, err := fetchBoxPage(kind, 60)
+		if err != nil {
+			return nil, err
+		}
+		writeCache(boxCache(kind), pg.posts)
+		return pg.posts, nil
+	}
+	limit := max(60, hint+seenToKeep+20)
+	for {
+		pg, err := fetchBoxPage(kind, limit)
+		if err != nil {
+			return nil, err
+		}
+		n := newCount(pg.posts, pg.nextSection)
+		fetchedAll := len(pg.posts) < limit
+		if n < len(pg.posts) || fetchedAll || limit >= maxNew+seenToKeep {
+			posts := pg.posts[:min(len(pg.posts), n+seenToKeep)]
+			for i := range posts {
+				posts[i].New = i < n
+			}
+			writeCache(boxCache(kind), posts)
+			return posts, nil
+		}
+		// Everything fetched was new: there's more of New For You.
+		limit = min(maxNew+seenToKeep, limit*2+seenToKeep)
+	}
 }
 
 func fetchThread(topic int64) ([]Entry, error) {
@@ -378,64 +471,4 @@ func shortDate(t, now time.Time) string {
 		return t.Format("Jan 2")
 	}
 	return t.Format("Jan 2, 2006")
-}
-
-// --- what's new ---------------------------------------------------------
-
-// seenStore remembers, per thread, how far you've read: the activity time
-// it had when you last opened it. HEY's box listing doesn't say what's
-// unread, so heypad keeps track itself. A box seen for the first time
-// counts everything in it as read, so you don't start with a wall of dots.
-type seenStore struct {
-	Topics map[int64]time.Time `json:"topics"`
-	Boxes  map[string]bool     `json:"boxes"` // boxes with a baseline
-}
-
-const seenFile = "seen.json"
-
-func loadSeen() *seenStore {
-	s := &seenStore{}
-	readCache(seenFile, s)
-	if s.Topics == nil {
-		s.Topics = map[int64]time.Time{}
-	}
-	if s.Boxes == nil {
-		s.Boxes = map[string]bool{}
-	}
-	return s
-}
-
-func (s *seenStore) save() { writeCache(seenFile, s) }
-
-// baseline marks everything in a box as read the first time it's loaded.
-func (s *seenStore) baseline(kind string, posts []Posting) bool {
-	if s.Boxes[kind] {
-		return false
-	}
-	s.Boxes[kind] = true
-	for _, p := range posts {
-		s.read(p)
-	}
-	return true
-}
-
-func (s *seenStore) read(p Posting) {
-	if t, ok := s.Topics[p.TopicID]; !ok || p.ActiveAt.After(t) {
-		s.Topics[p.TopicID] = p.ActiveAt
-	}
-}
-
-func (s *seenStore) isNew(p Posting) bool {
-	t, ok := s.Topics[p.TopicID]
-	return !ok || p.ActiveAt.After(t)
-}
-
-func (s *seenStore) count(posts []Posting) int {
-	n := 0
-	for _, p := range posts {
-		if s.isNew(p) {
-			n++
-		}
-	}
-	return n
 }

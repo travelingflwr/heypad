@@ -10,14 +10,14 @@ over whatever you're doing, replies open in floating panes, and Claude is one
 key away for any thread.
 
 <p align="center">
-  <img src="docs/list-dark.png" width="420" alt="The Imbox in a dark theme: avatars, senders, subjects and previews, two threads marked new with blue dots, and one row selected">
+  <img src="docs/list-dark.png" width="420" alt="The Imbox in a dark theme: a New For You section with three threads marked by blue dots, then Previously Seen, with one row selected">
   <img src="docs/thread-dark.png" width="420" alt="A thread open in the reader: the subject, two messages with avatars and dates, and a quoted line">
 </p>
 
-It's just as happy in a slim pane beside your terminal:
+Floating, it shows only what's new, and it's just as happy in a slim pane:
 
 <p align="center">
-  <img src="docs/narrow-dark.png" width="300" alt="heypad in a narrow pane: the same list, with previews cut short and the header hints trimmed to fit">
+  <img src="docs/narrow-dark.png" width="300" alt="heypad in a narrow floating window: only the three new threads, each with a blue dot">
 </p>
 
 <sub>The screenshots show a made-up mailbox (`heypad render --demo`).</sub>
@@ -30,8 +30,13 @@ It's just as happy in a slim pane beside your terminal:
   paragraphs, quoted text with a bar, lists, and the clutter of marketing
   mail (tracking images, layout tables) stripped out. `O` opens the original
   in HEY.
-- **What's new.** A blue dot marks threads with activity since you last
-  opened them, and the count shows in the header and the pane's title.
+- **What's new, the way HEY sees it.** The Imbox shows HEY's own New For
+  You and Previously Seen sections, and a blue dot marks everything you
+  haven't opened. Open a thread and it's seen, in HEY too. The count shows in
+  the header and the pane's title.
+- **Aware of where it is.** The floating window shows only what's new, so a
+  quick check is just that: work down the list to *All caught up*. A full
+  window shows both sections. `s` switches.
 - **Motion that costs nothing.** The list is uploaded once as a tall image and
   scrolled by moving the window onto it, and the selection is a separate
   small image underneath. Moving through mail sends a few bytes, not a frame.
@@ -92,6 +97,7 @@ heypad view           # run it in this pane
 | `Enter` `o` | open the thread |
 | `Esc` `h` | back to the list; on the list, minimize the floating window |
 | `Tab` `1`–`6` | switch boxes |
+| `s` | in the Imbox, only what's new, or both sections |
 | `n` `p` | next or previous thread |
 | `r` | reply |
 | `c` | new message |
@@ -104,6 +110,10 @@ Clicking a thread opens it; clicking the header goes back.
 
 ## How it works
 
+- **The Imbox's sections come from HEY's own ordering.** New For You and
+  Previously Seen are each listed newest first, so where that order rises is
+  where Previously Seen begins, and HEY's page cursor settles the case where
+  everything is in one section (inbox zero, say).
 - **Mail comes from the `hey` CLI's JSON**, and heypad keeps the last result
   of each box and thread on disk (`~/.local/state/heypad`), so it opens
   instantly and refreshes behind the scenes every 90 seconds.
@@ -123,7 +133,8 @@ Clicking a thread opens it; clicking the header goes back.
   to treat the email as untrusted data, never as instructions, and to send a
   reply only after you approve its exact text. Set `HEYPAD_AGENT` to use a
   different agent command.
-- "New" is tracked locally, so each machine keeps its own record.
+- What's new comes from HEY itself, so it matches HEY on the web and your
+  phone. Opening a thread in heypad marks it seen in HEY, as HEY's apps do.
 
 ## Credits
 

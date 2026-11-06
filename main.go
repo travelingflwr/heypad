@@ -38,6 +38,8 @@ In the viewer
   r            reply           c          new message
   a            ask Claude      O          open in HEY
   n p          next/previous thread       R   refresh      q   quit
+  s            in the Imbox: only what's new, or both sections
+               (the floating window starts with only what's new)
 
 Mail comes from the hey CLI (https://github.com/basecamp/hey-cli); sign in
 with it first.
@@ -109,6 +111,8 @@ func run(args []string) error {
 		return runRexInstall(args)
 	case "keys":
 		return runKeyTest()
+	case "snapshot":
+		return runSnapshot()
 	}
 	return fmt.Errorf("unknown command %q (try heypad help)", cmd)
 }
@@ -125,7 +129,8 @@ func runRender(args []string) error {
 	height := fs.Float64("height", 760, "height in points")
 	scale := fs.Float64("scale", 2, "device pixels per point")
 	theme := fs.String("theme", "light", "light or dark")
-	fresh := fs.Int("fresh", -1, "show the first N threads as new (-1: what's really new)")
+	fresh := fs.Int("fresh", -1, "mark the first N threads New For You (-1: as HEY has them)")
+	floating := fs.Bool("floating", false, "draw only what's new, as the floating window does")
 	demo := fs.Bool("demo", false, "draw a made-up mailbox instead of yours, for screenshots")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -146,7 +151,7 @@ func runRender(args []string) error {
 		posts = demoPosts(time.Now())
 	}
 	if len(posts) == 0 {
-		if posts, err = fetchBox(*kind); err != nil {
+		if posts, err = fetchBox(*kind, 0); err != nil {
 			return err
 		}
 	}
@@ -182,28 +187,39 @@ func runRender(args []string) error {
 		r.drawHeader(hImg, header{left: "‹ " + title, leftRole: roleAccent, right: "r reply   a ask Claude   O open", rightRole: roleFaint})
 		r.drawDoc(bImg, r.layoutThread(p, entries, *width, ""), 0)
 	} else {
-		badge := ""
-		if *fresh > 0 {
-			badge = fmt.Sprintf("%d new", *fresh)
-		}
-		r.drawHeader(hImg, header{left: title, leftBold: true, badge: badge, right: "Tab next box   c compose", rightRole: roleFaint})
-		if *sel >= 0 && *sel < len(posts) {
-			r.selection(bImg, rowTop(*sel))
-		}
-		seen := loadSeen()
-		seen.baseline(*kind, posts)
-		isNew := seen.isNew
+		// --fresh N marks the first N as New For You; --floating draws only
+		// those, the way the floating window does.
 		if *fresh >= 0 {
-			isNew = func(p Posting) bool {
-				for i := 0; i < *fresh && i < len(posts); i++ {
-					if posts[i].ID == p.ID {
-						return true
-					}
-				}
-				return false
+			for i := range posts {
+				posts[i].New = i < *fresh
 			}
 		}
-		r.drawList(bImg, posts, 0, "Nothing here.", isNew)
+		n := 0
+		for _, p := range posts {
+			if p.New {
+				n++
+			}
+		}
+		badge, hint := "", "Tab next box   c compose"
+		if n > 0 {
+			badge = fmt.Sprintf("%d new", n)
+		}
+		shown := posts
+		if *floating {
+			hint = "s all mail   c compose"
+			shown = nil
+			for _, p := range posts {
+				if p.New {
+					shown = append(shown, p)
+				}
+			}
+		}
+		r.drawHeader(hImg, header{left: title, leftBold: true, badge: badge, right: hint, rightRole: roleFaint})
+		lay := layoutList(shown, *kind == "imbox" && !*floating)
+		if *sel >= 0 && *sel < len(shown) {
+			r.selection(bImg, lay.tops[*sel])
+		}
+		r.drawList(bImg, shown, lay, 0, "All caught up", *floating && len(shown) == 0)
 	}
 	copyInto(img, hImg, 0)
 	copyInto(img, bImg, hdrPx)

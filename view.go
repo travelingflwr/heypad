@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"slices"
 	"syscall"
 	"time"
 
@@ -176,6 +177,9 @@ func runView(opt viewOptions) error {
 	signal.Notify(winch, syscall.SIGWINCH)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// kill -USR1 saves what's on screen, for debugging (heypad snapshot).
+	snap := make(chan os.Signal, 1)
+	signal.Notify(snap, syscall.SIGUSR1)
 	results := make(chan result, 32)
 
 	// --- state ----------------------------------------------------------
@@ -218,17 +222,79 @@ func runView(opt viewOptions) error {
 		sheetImg *image.RGBA // the sheet's pixels, to cut the faded edges from
 		bandIDs  [2]int      // the faded top and bottom edges, 0 for none
 
-		seen    = loadSeen()
-		seenVer int
+		// The floating window shows only what's new; a full window shows
+		// the Imbox's two sections. s switches.
+		showAll = !opt.floating
+		// A thread opened from New For You, to move out of it on the way
+		// back to the list (HEY already has it as seen).
+		pendingRead int64
+
+		// For debug snapshots: the last header and selection images, and
+		// the view row the selection's image starts on.
+		hdrImg, hlImg *image.RGBA
+		hlRow         int
 	)
 	for _, b := range boxes {
 		posts[b.kind] = cachedBox(b.kind)
-		if len(posts[b.kind]) > 0 && seen.baseline(b.kind, posts[b.kind]) {
-			seen.save()
-		}
 	}
 	kind := func() string { return boxes[boxIdx].kind }
-	cur := func() []Posting { return posts[kind()] }
+	onlyNew := func(k string) bool { return k == "imbox" && !showAll }
+	visible := func(k string) []Posting {
+		if !onlyNew(k) {
+			return posts[k]
+		}
+		var out []Posting
+		for _, p := range posts[k] {
+			if p.New {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	cur := func() []Posting { return visible(kind()) }
+	lay := func() listLayout { return layoutList(cur(), kind() == "imbox" && showAll) }
+	top := func(i int) float64 {
+		if l := lay(); i >= 0 && i < len(l.tops) {
+			return l.tops[i]
+		}
+		return listTop
+	}
+	newIn := func(k string) int {
+		n := 0
+		for _, p := range posts[k] {
+			if p.New {
+				n++
+			}
+		}
+		return n
+	}
+	// indexOf finds a thread in the visible list by its box item ID.
+	indexOf := func(id int64) int {
+		for i, p := range cur() {
+			if p.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	// readNow moves a thread out of New For You, to the top of Previously
+	// Seen, the way HEY files it once it's seen.
+	readNow := func(id int64) {
+		list := posts[kind()]
+		i := slices.IndexFunc(list, func(p Posting) bool { return p.ID == id })
+		if i < 0 || !list[i].New {
+			return
+		}
+		p := list[i]
+		p.New = false
+		list = slices.Delete(slices.Clone(list), i, i+1)
+		at := 0
+		for at < len(list) && list[at].New {
+			at++
+		}
+		posts[kind()] = slices.Insert(list, at, p)
+		vers[kind()]++
+	}
 	sel := func() int {
 		n := len(cur())
 		s := sels[kind()]
@@ -248,7 +314,7 @@ func runView(opt viewOptions) error {
 	}
 	setTitle := func() {
 		t := "HEY · " + boxes[boxIdx].title
-		if n := seen.count(cur()); n > 0 {
+		if n := newIn(kind()); n > 0 {
 			t += fmt.Sprintf(" (%d)", n)
 		}
 		if screen == screenThread && th != nil {
@@ -263,7 +329,7 @@ func runView(opt viewOptions) error {
 		}
 		loading[k] = true
 		go func() {
-			p, err := fetchBox(k)
+			p, err := fetchBox(k, newIn(k))
 			results <- result{kind: resBox, box: k, posts: p, err: err}
 		}()
 	}
@@ -310,7 +376,7 @@ func runView(opt viewOptions) error {
 		if screen == screenThread && th != nil {
 			return threadDoc(r, g).height
 		}
-		return listHeight(len(cur()))
+		return lay().height
 	}
 	maxOffset := func(r *renderer, g geom) float64 {
 		return math.Max(0, contentHeight(r, g)-g.viewH())
@@ -324,7 +390,10 @@ func runView(opt viewOptions) error {
 	keepSelVisible := func() {
 		g := measure(int(out.Fd()), opt.scale)
 		r := newRenderer(g)
-		top := rowTop(sel())
+		top := top(sel())
+		if sel() == 0 {
+			top = 0 // the first row brings its section heading into view
+		}
 		margin := math.Min(rowPitch/2, math.Max(0, (g.viewH()-rowPitch)/2))
 		if top-margin < target {
 			target = top - margin
@@ -333,7 +402,7 @@ func runView(opt viewOptions) error {
 			target = top + rowPitch + margin - g.viewH()
 		}
 		target = math.Max(0, math.Min(target, maxOffset(r, g)))
-		hlTarget = top
+		hlTarget = lay().tops[sel()]
 		if shown != target || hlShown != hlTarget {
 			startAnim()
 		}
@@ -346,7 +415,7 @@ func runView(opt viewOptions) error {
 			h.right, h.rightRole = "r reply   a ask Claude   O open", roleFaint
 		} else {
 			h.left, h.leftBold = boxes[boxIdx].title, true
-			if n := seen.count(cur()); n > 0 {
+			if n := newIn(kind()); n > 0 {
 				h.badge = fmt.Sprintf("%d new", n)
 			}
 			h.rightRole = roleFaint
@@ -355,6 +424,10 @@ func runView(opt viewOptions) error {
 				h.right, h.rightRole = errs[kind()], roleGray
 			case loading[kind()]:
 				h.right = "Updating…"
+			case opt.floating && kind() == "imbox" && showAll:
+				h.right = "s new only   c compose"
+			case opt.floating && kind() == "imbox":
+				h.right = "s all mail   c compose"
 			default:
 				h.right = "Tab next box   c compose"
 			}
@@ -409,7 +482,7 @@ func runView(opt viewOptions) error {
 			kittyUpload(w, img, id)
 			kittyPlace(w, id, 1, 1, 0, g.widthPx, g.hdrPx, g.ws.cols, g.hdrRows, 0)
 			drop = append(drop, hdrID)
-			hdrID, hdrKey = id, key
+			hdrID, hdrKey, hdrImg = id, key, img
 		}
 
 		// The content: one tall sheet, uploaded once and scrolled by moving
@@ -420,7 +493,7 @@ func runView(opt viewOptions) error {
 			threadDoc(r, g)
 			ck = fmt.Sprint("t", docKey, pal)
 		} else {
-			ck = fmt.Sprint("l", kind(), vers[kind()], seenVer, loading[kind()] && len(cur()) == 0, errs[kind()], pal, g, time.Now().Format("2006-01-02 15:04"))
+			ck = fmt.Sprint("l", kind(), vers[kind()], showAll, loading[kind()] && len(cur()) == 0, errs[kind()], pal, g, time.Now().Format("2006-01-02 15:04"))
 		}
 		if force || ck != sheetKey || offsetPx < sheetTop || offsetPx+g.viewPx > sheetTop+sheetH {
 			// The sheet can start above the content (a negative offset) while
@@ -445,7 +518,11 @@ func runView(opt viewOptions) error {
 				default:
 					msg = "Nothing in " + boxes[boxIdx].title + "."
 				}
-				r.drawList(img, cur(), float64(top)/g.scale, msg, seen.isNew)
+				done := onlyNew(kind()) && len(cur()) == 0 && errs[kind()] == "" && !(loading[kind()] && len(posts[kind()]) == 0)
+				if done {
+					msg = "All caught up"
+				}
+				r.drawList(img, cur(), lay(), float64(top)/g.scale, msg, done)
 			}
 			id := nextID
 			nextID++
@@ -518,7 +595,7 @@ func runView(opt viewOptions) error {
 					kittyUpload(w, img, id)
 					kittyPlace(w, id, g.hdrRows+1+r0, 1, 0, g.widthPx, (r1-r0)*g.cellH, g.ws.cols, r1-r0, -1)
 					drop = append(drop, hlID)
-					hlID, hlKey = id, key
+					hlID, hlKey, hlImg, hlRow = id, key, img, r0
 				}
 			}
 		}
@@ -553,7 +630,7 @@ func runView(opt viewOptions) error {
 	// --- actions --------------------------------------------------------
 
 	snapList := func() {
-		hlTarget = rowTop(sel())
+		hlTarget = top(sel())
 		hlShown = hlTarget
 		target = listOff[kind()]
 		shown = target
@@ -581,10 +658,8 @@ func runView(opt viewOptions) error {
 		}
 		screen = screenThread
 		th = &threadState{post: p, entries: cachedThread(p.TopicID), loading: true}
-		if seen.isNew(p) {
-			seen.read(p)
-			seen.save()
-			seenVer++
+		if p.New {
+			pendingRead = p.ID
 		}
 		// The reader rises the last few points into place.
 		shown, target = -introPt, 0
@@ -594,8 +669,18 @@ func runView(opt viewOptions) error {
 		go markSeen(p)
 		draw(false)
 	}
+	// settleRead files the thread just read under Previously Seen. In the
+	// floating window it leaves the list, and the selection lands on the
+	// next new thread.
+	settleRead := func() {
+		if pendingRead != 0 {
+			readNow(pendingRead)
+			pendingRead = 0
+		}
+	}
 	back := func() {
 		screen, th = screenList, nil
+		settleRead()
 		snapList()
 		setTitle()
 		draw(false)
@@ -608,8 +693,10 @@ func runView(opt viewOptions) error {
 			draw(false)
 			return
 		}
-		sels[kind()] = i
-		openThread(p[i])
+		next := p[i]
+		settleRead()
+		sels[kind()] = max(0, indexOf(next.ID))
+		openThread(next)
 	}
 	scrollBy := func(dy float64) {
 		g := lastGeom
@@ -794,6 +881,19 @@ func runView(opt viewOptions) error {
 			}
 		case k.is('c', 0):
 			write(nil)
+		case k.is('s', 0) && kind() == "imbox":
+			// Between only what's new and the whole Imbox, on the same thread.
+			var id int64
+			if p, ok := selected(); ok {
+				id = p.ID
+			}
+			showAll = !showAll
+			sels[kind()] = max(0, indexOf(id))
+			listOff[kind()] = 0
+			snapList()
+			keepSelVisible()
+			shown = target
+			draw(false)
 		case k.is('O', 0) || k.is('o', modShift):
 			if p, ok := selected(); ok {
 				openURL(p.AppURL)
@@ -820,11 +920,10 @@ func runView(opt viewOptions) error {
 			return
 		}
 		y := (py-float64(g.hdrPx))/g.scale + shown
-		i := int(math.Floor((y - listTop) / rowPitch))
-		if p := cur(); i >= 0 && i < len(p) {
+		if i := lay().rowAt(y); i >= 0 {
 			sels[kind()] = i
-			hlTarget, hlShown = rowTop(i), rowTop(i)
-			openThread(p[i])
+			hlTarget, hlShown = top(i), top(i)
+			openThread(cur()[i])
 		}
 	}
 
@@ -875,41 +974,35 @@ func runView(opt viewOptions) error {
 				if res.err != nil {
 					errs[res.box] = res.err.Error()
 				} else {
-					old := posts[res.box]
-					var keep int64
-					arrived := 0 // threads that came in above what was first
-					if len(old) > 0 {
+					// Keep what's on screen steady across the update: the
+					// selection stays on its thread, and the rows in view stay
+					// put, gliding to show what arrived above them.
+					here := res.box == kind() && screen == screenList
+					var keep, anchor int64
+					anchorTop := 0.0
+					if old := visible(res.box); len(old) > 0 {
 						keep = old[max(0, min(sels[res.box], len(old)-1))].ID
-						for i, p := range res.posts {
-							if p.ID == old[0].ID {
-								arrived = i
-								break
-							}
-						}
+						anchor, anchorTop = old[0].ID, layoutList(old, res.box == "imbox" && showAll).tops[0]
 					}
 					posts[res.box], errs[res.box] = res.posts, ""
-					if seen.baseline(res.box, res.posts) {
-						seen.save()
-					}
-					seenVer++
-					for i, p := range res.posts {
-						if p.ID == keep {
-							sels[res.box] = i // the selection stays on its thread
+					vers[res.box]++
+					if keep != 0 && here {
+						if i := indexOf(keep); i >= 0 {
+							sels[res.box] = i
 						}
 					}
-					vers[res.box]++
-					if res.box == kind() && screen == screenList {
-						hlTarget = rowTop(sel())
+					if here {
+						hlTarget = top(sel())
 						hlShown = hlTarget
-						if arrived > 0 {
-							// The rows on screen stay put for a frame; at the top of
-							// the list the view then glides up to show what arrived.
-							lift := float64(arrived) * rowPitch
-							shown += lift
-							if target > 0.5 {
-								target += lift
-							} else {
-								startAnim()
+						if i := indexOf(anchor); anchor != 0 && i >= 0 {
+							if lift := top(i) - anchorTop; lift > 0 {
+								shown += lift
+								hlShown = hlTarget // the selection moves with its row
+								if target > 0.5 {
+									target += lift
+								} else {
+									startAnim()
+								}
 							}
 						}
 					}
@@ -965,6 +1058,23 @@ func runView(opt viewOptions) error {
 					return nil
 				}
 			}
+		case <-snap:
+			g := lastGeom
+			offsetPx := int(math.Round(shown * g.scale))
+			info := map[string]any{
+				"screen": map[screenKind]string{screenList: "list", screenThread: "thread"}[screen],
+				"box":    kind(), "posts": len(cur()), "sel": sel(), "new": newIn(kind()), "showAll": showAll,
+				"shown": shown, "target": target, "hlShown": hlShown, "hlTarget": hlTarget,
+				"offsetPx": offsetPx, "sheetTop": sheetTop, "sheetH": sheetH,
+				"loading": loading[kind()], "error": errs[kind()], "status": status,
+				"cells": fmt.Sprint(g.ws.cols, "x", g.ws.rows), "cellPx": fmt.Sprint(g.cellW, "x", g.cellH),
+				"scale": g.scale, "hdrRows": g.hdrRows, "viewRows": g.rows, "theme": opt.theme, "floating": opt.floating,
+			}
+			if th != nil {
+				info["thread"] = map[string]any{"topic": th.post.TopicID, "subject": th.post.Subject,
+					"entries": len(th.entries), "loading": th.loading, "error": th.err}
+			}
+			writeSnapshot(g, pal, hdrImg, sheetImg, offsetPx-sheetTop, hlImg, hlRow, info)
 		case <-quit:
 			return nil
 		}

@@ -33,6 +33,7 @@ func demoPosts(now time.Time) []Posting {
 			ID: int64(1000 + i), TopicID: int64(2000 + i), Subject: m.subject, Summary: m.summary,
 			ActiveAt: now.Add(-m.ago), Count: m.count,
 			Creator: Contact{Name: m.name, Email: m.email, AvatarColor: m.color},
+			New:     i < 3,
 		})
 	}
 	return out
