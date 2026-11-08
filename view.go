@@ -419,7 +419,11 @@ func runView(opt viewOptions) error {
 			target = top + rowPitch + margin - g.viewH()
 		}
 		target = math.Max(0, math.Min(target, maxOffset(r, g)))
-		hlTarget = lay().tops[sel()]
+		// An empty list (all caught up) has no rows to highlight.
+		hlTarget = listTop
+		if l := lay(); sel() < len(l.tops) {
+			hlTarget = l.tops[sel()]
+		}
 		if shown != target || hlShown != hlTarget {
 			startAnim()
 		}
