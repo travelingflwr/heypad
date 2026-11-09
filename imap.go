@@ -72,7 +72,8 @@ type imapThread struct {
 
 var threads = struct {
 	sync.Mutex
-	m map[int64]imapThread
+	m    map[int64]imapThread
+	read time.Time // the file's modification time when last read
 }{m: map[int64]imapThread{}}
 
 func threadsPath() string { return filepath.Join(stateDir(), "imap-threads.json") }
@@ -83,7 +84,13 @@ func lookupThread(id int64) (imapThread, bool) {
 	if t, ok := threads.m[id]; ok {
 		return t, true
 	}
-	// Another heypad (the viewer) may have listed it: read the file.
+	// Another heypad (the viewer) may have listed it: read the file, if
+	// it changed since the last look.
+	st, err := os.Stat(threadsPath())
+	if err != nil || !st.ModTime().After(threads.read) {
+		return imapThread{}, false
+	}
+	threads.read = st.ModTime()
 	if data, err := os.ReadFile(threadsPath()); err == nil {
 		var m map[int64]imapThread
 		if json.Unmarshal(data, &m) == nil {

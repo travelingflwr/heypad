@@ -117,10 +117,13 @@ in a message opens it.
 
 ### Other accounts (iCloud)
 
-heypad can show an iCloud Mail account beside HEY, read over IMAP and sent
-through SMTP. Its Inbox gets the same two sections as HEY's Imbox (New For
-You for anything unread, then Previously Seen), and its Inbox, Archive and
-Sent come after HEY's boxes (`Tab` or the number keys).
+heypad can bring in an iCloud Mail account, read over IMAP and sent through
+SMTP. The Imbox becomes a unified inbox: the account's unread mail joins
+HEY's New For You, newest first, with a small badge naming the account,
+and its recently seen mail joins Previously Seen. Opening, replying and
+marking seen go to the right account. The account's Inbox, Archive and Sent
+also come after HEY's boxes (`Tab` or the number keys), for when you want
+only that account. Triage with Claude (`A`) covers HEY's threads.
 
 1. Make an app-specific password at [account.apple.com](https://account.apple.com)
    (Sign-In and Security, App-Specific Passwords).

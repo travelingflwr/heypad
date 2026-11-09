@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -61,7 +63,94 @@ func loadBox(kind string, hint int) ([]Posting, error) {
 	if _, _, ok := splitKind(kind); ok {
 		return fetchIMAPBox(kind)
 	}
+	if kind == "imbox" {
+		return loadImbox(hint)
+	}
 	return fetchBox(kind, hint)
+}
+
+// loadImbox is the unified Imbox: HEY's, with every account's Inbox merged
+// in. New For You is everything unread from all of them, newest first;
+// Previously Seen is the newest of what's been seen. If one source fails,
+// the others still show; only all of them failing is an error.
+func loadImbox(hint int) ([]Posting, error) {
+	accts := loadAccounts()
+	type got struct {
+		posts []Posting
+		err   error
+	}
+	results := make([]got, 1+len(accts))
+	var wg sync.WaitGroup
+	wg.Add(len(results))
+	go func() {
+		defer wg.Done()
+		p, err := fetchBox("imbox", hint)
+		results[0] = got{p, err}
+	}()
+	for i, a := range accts {
+		go func(i int, a account) {
+			defer wg.Done()
+			p, err := fetchIMAPBox(accountKind(a.Name, "INBOX"))
+			results[i+1] = got{p, err}
+		}(i, a)
+	}
+	wg.Wait()
+	var fresh, seen []Posting
+	var errs []string
+	for i, r := range results {
+		if r.err != nil {
+			name := "HEY"
+			if i > 0 {
+				name = accts[i-1].Name
+			}
+			errs = append(errs, name+": "+r.err.Error())
+			continue
+		}
+		for _, p := range r.posts {
+			if p.New {
+				fresh = append(fresh, p)
+			} else {
+				seen = append(seen, p)
+			}
+		}
+	}
+	if len(errs) == len(results) {
+		return nil, errors.New(strings.Join(errs, "; "))
+	}
+	newest := func(ps []Posting) {
+		sort.SliceStable(ps, func(i, j int) bool { return ps[i].ObservedAt.After(ps[j].ObservedAt) })
+	}
+	newest(fresh)
+	newest(seen)
+	if len(seen) > seenToKeep {
+		seen = seen[:seenToKeep]
+	}
+	out := append(fresh, seen...)
+	writeCache(boxCache("imbox"), out)
+	return out, nil
+}
+
+// postAccount is the account a thread came from, or "" for HEY.
+func postAccount(p Posting) string {
+	if !isIMAPTopic(p.TopicID) {
+		return ""
+	}
+	if t, ok := lookupThread(p.TopicID); ok {
+		return t.Account
+	}
+	return "Mail"
+}
+
+// heyOnly is posts without other accounts' threads, for what only HEY can
+// do (triage reads threads with the hey CLI).
+func heyOnly(posts []Posting) []Posting {
+	var out []Posting
+	for _, p := range posts {
+		if !isIMAPTopic(p.TopicID) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func loadThread(topic int64) ([]Entry, error) {

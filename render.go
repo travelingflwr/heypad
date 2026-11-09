@@ -167,6 +167,15 @@ func (r *renderer) chip(img *image.RGBA, label string, x, cy float64) float64 {
 	return w
 }
 
+// accountChip labels a row from an account other than HEY, ending at x.
+func (r *renderer) accountChip(img *image.RGBA, name string, x, cy float64) float64 {
+	text := r.clean(name, false)
+	w := r.width(text, 10.5, false) + 12
+	r.fillRoundRect(img, x-w, cy-8, x, cy+8, 8, r.tinted(r.pal.text, 0.07))
+	r.drawRaw(img, text, x-w+6, cy+3.8, 10.5, false, r.pal.gray)
+	return w
+}
+
 // markBadge covers a row's avatar with a check, for a thread marked to be
 // seen.
 func (r *renderer) markBadge(img *image.RGBA, cx, cy float64) {
@@ -546,6 +555,9 @@ func (r *renderer) postRow(img *image.RGBA, p Posting, y0, widthPt float64, last
 	if fresh {
 		r.fillCircle(img, right-dw-8, y0+19, 3.5, r.pal.accent)
 		dw += 13
+	}
+	if a := postAccount(p); a != "" && right-dw-rowTextX > 150 {
+		dw += r.accountChip(img, a, right-dw-8, y0+19) + 8
 	}
 	if t, ok := r.triage[p.ID]; ok && right-dw-rowTextX > 150 {
 		dw += r.chip(img, t.Label, right-dw-8, y0+19) + 8

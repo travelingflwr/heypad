@@ -901,7 +901,7 @@ func runView(opt viewOptions) error {
 			draw(false)
 			return
 		}
-		block, err := triageAgent(posts["imbox"])
+		block, err := triageAgent(heyOnly(posts["imbox"]))
 		if err != nil {
 			setStatus(err.Error(), roleGray)
 			draw(false)
