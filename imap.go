@@ -129,6 +129,10 @@ type imapSession struct {
 	acct account
 	c    *imapclient.Client
 	sel  string
+	// noStructure are folders where the server describes some message's
+	// structure in a way the IMAP library can't read; their previews come
+	// from the start of each message instead.
+	noStructure map[string]bool
 }
 
 var sessions = struct {
@@ -301,25 +305,46 @@ func fetchIMAPBox(kind string) ([]Posting, error) {
 	var bufs []*imapclient.FetchMessageBuffer
 	var validity uint32
 	refsSec := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFields: []string{"References"}, Peek: true}
-	err = s.run(func(c *imapclient.Client) error {
-		data, err := s.selectBox(c, mailbox, true)
-		if err != nil {
+	list := func(structure bool) error {
+		return s.run(func(c *imapclient.Client) error {
+			data, err := s.selectBox(c, mailbox, true)
+			if err != nil {
+				return err
+			}
+			validity, bufs = data.UIDValidity, nil
+			n := data.NumMessages
+			if n == 0 {
+				return nil
+			}
+			var seq imap.SeqSet
+			seq.AddRange(max(1, n-imapWindow+1), n)
+			opt := &imap.FetchOptions{
+				UID: true, Flags: true, Envelope: true, InternalDate: true,
+				BodySection: []*imap.FetchItemBodySection{refsSec},
+			}
+			if structure {
+				opt.BodyStructure = &imap.FetchItemBodyStructure{}
+			}
+			bufs, err = c.Fetch(seq, opt).Collect()
 			return err
+		})
+	}
+	s.mu.Lock()
+	structure := !s.noStructure[mailbox]
+	s.mu.Unlock()
+	err = list(structure)
+	var serr *imap.Error
+	if err != nil && structure && !errors.As(err, &serr) {
+		// Most likely a body structure the library can't parse: list again
+		// without them, and remember for this folder.
+		s.mu.Lock()
+		if s.noStructure == nil {
+			s.noStructure = map[string]bool{}
 		}
-		validity, bufs = data.UIDValidity, nil
-		n := data.NumMessages
-		if n == 0 {
-			return nil
-		}
-		var seq imap.SeqSet
-		seq.AddRange(max(1, n-imapWindow+1), n)
-		bufs, err = c.Fetch(seq, &imap.FetchOptions{
-			UID: true, Flags: true, Envelope: true, InternalDate: true,
-			BodyStructure: &imap.FetchItemBodyStructure{},
-			BodySection:   []*imap.FetchItemBodySection{refsSec},
-		}).Collect()
-		return err
-	})
+		s.noStructure[mailbox] = true
+		s.mu.Unlock()
+		err = list(false)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -480,40 +505,52 @@ func textPart(bs imap.BodyStructure) (path []int, part *imap.BodyStructureSingle
 
 func (s *imapSession) previews(mailbox string, msgs []imapMsg) map[imap.UID]string {
 	out := map[imap.UID]string{}
-	type want struct {
-		uids []imap.UID
-		part *imap.BodyStructureSinglePart
-	}
-	byPath := map[string]*want{}
+	parts := map[imap.UID]*imap.BodyStructureSinglePart{}
+	byPath := map[string][]imap.UID{}
 	paths := map[string][]int{}
+	var whole []imap.UID // no structure: preview from the message's start
 	for _, m := range msgs {
+		if m.bs == nil {
+			whole = append(whole, m.uid)
+			continue
+		}
 		path, part := textPart(m.bs)
 		if part == nil {
 			continue
 		}
-		if len(path) == 0 {
-			path = []int{1}
-		}
-		k := fmt.Sprint(path, part.MediaType(), part.Encoding, part.Params["charset"])
-		if byPath[k] == nil {
-			byPath[k] = &want{part: part}
-			paths[k] = path
-		}
-		byPath[k].uids = append(byPath[k].uids, m.uid)
+		k := fmt.Sprint(path)
+		parts[m.uid], paths[k] = part, path
+		byPath[k] = append(byPath[k], m.uid)
 	}
 	s.run(func(c *imapclient.Client) error {
 		if _, err := s.selectBox(c, mailbox, false); err != nil {
 			return err
 		}
-		for k, w := range byPath {
+		for k, uids := range byPath {
 			sec := &imap.FetchItemBodySection{Part: paths[k], Peek: true, Partial: &imap.SectionPartial{Offset: 0, Size: 3000}}
-			bufs, err := c.Fetch(imap.UIDSetNum(w.uids...), &imap.FetchOptions{UID: true, BodySection: []*imap.FetchItemBodySection{sec}}).Collect()
+			bufs, err := c.Fetch(imap.UIDSetNum(uids...), &imap.FetchOptions{UID: true, BodySection: []*imap.FetchItemBodySection{sec}}).Collect()
 			if err != nil {
 				return err
 			}
 			for _, b := range bufs {
 				for _, bs := range b.BodySection {
-					out[b.UID] = previewText(bs.Bytes, w.part)
+					out[b.UID] = previewText(bs.Bytes, parts[b.UID])
+				}
+			}
+		}
+		if len(whole) > 0 {
+			sec := &imap.FetchItemBodySection{Peek: true, Partial: &imap.SectionPartial{Offset: 0, Size: 16000}}
+			bufs, err := c.Fetch(imap.UIDSetNum(whole...), &imap.FetchOptions{UID: true, BodySection: []*imap.FetchItemBodySection{sec}}).Collect()
+			if err != nil {
+				return err
+			}
+			for _, b := range bufs {
+				for _, bs := range b.BodySection {
+					_, sum := messageMarkdown(bs.Bytes)
+					if len(sum) > 400 {
+						sum = sum[:400]
+					}
+					out[b.UID] = sum
 				}
 			}
 		}
