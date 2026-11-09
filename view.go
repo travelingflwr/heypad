@@ -472,11 +472,11 @@ func runView(opt viewOptions) error {
 			case loading[kind()]:
 				h.right = "Updating…"
 			case opt.floating && isInbox(kind()) && showAll:
-				h.right = "s new only   c compose"
+				h.right = "s new only   # trash   c compose"
 			case opt.floating && isInbox(kind()):
-				h.right = "s all mail   c compose"
+				h.right = "s all mail   # trash   c compose"
 			default:
-				h.right = "Tab next box   c compose"
+				h.right = "Tab next box   # trash   c compose"
 			}
 		}
 		if confirmSeen != nil && confirmTrash {

@@ -23,7 +23,7 @@ const (
 	keyEnd
 	keyPageUp
 	keyPageDown
-	keyDelete // forward delete (Fn-Backspace)
+	keyDelete // forward delete (Fn-Delete on a Mac keyboard)
 	keyInsert
 )
 

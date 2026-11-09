@@ -44,7 +44,7 @@ In the viewer
                (the floating window starts with only what's new)
   x            mark a thread     X   mark it and every new one below
   e            mark seen (the marked ones, or this one), after a yes
-  #, Delete    move to Trash (the marked ones, or this one), after a yes
+  #, Fn-Delete move to Trash (the marked ones, or this one), after a yes
   A            triage New For You with Claude
 
 Mail comes from the hey CLI (https://github.com/basecamp/hey-cli); sign in
@@ -217,13 +217,13 @@ func runRender(args []string) error {
 				n++
 			}
 		}
-		badge, hint := "", "Tab next box   c compose"
+		badge, hint := "", "Tab next box   # trash   c compose"
 		if n > 0 {
 			badge = fmt.Sprintf("%d new", n)
 		}
 		shown := posts
 		if *floating {
-			hint = "s all mail   c compose"
+			hint = "s all mail   # trash   c compose"
 			shown = nil
 			for _, p := range posts {
 				if p.New {
