@@ -26,10 +26,11 @@ Floating, it shows only what's new, and it's just as happy in a slim pane:
 
 - **Your boxes.** Imbox, The Feed, Paper Trail, Reply Later, Set Aside and
   Bubble Up. Tab between them, or press 1 to 6.
-- **A reader built for mail.** Threads are laid out like a page: wrapped
-  paragraphs, quoted text with a bar, lists, and the clutter of marketing
-  mail (tracking images, layout tables) stripped out. `O` opens the original
-  in HEY.
+- **A reader built for mail.** Threads are laid out like a page, with rich
+  text: headings, bold, italic and strikethrough, links you can click,
+  lists, quotes with a bar, code in a monospace font, real tables, and the
+  message's images. The clutter of marketing mail (tracking pixels, layout
+  tables) is stripped out. `O` opens the original in HEY.
 - **What's new, the way HEY sees it.** The Imbox shows HEY's own New For
   You and Previously Seen sections, and a blue dot marks everything you
   haven't opened. Open a thread and it's seen, in HEY too. The count shows in
@@ -134,6 +135,10 @@ Clicking a thread opens it; clicking the header goes back.
 
 - heypad talks only to HEY, through the `hey` CLI, and to Rex. It keeps
   cached mail in `~/.local/state/heypad` (readable only by you).
+- **Images load only through HEY's image proxy** (`*.hey.com`), which
+  doesn't tell senders you opened their mail or where you are. Images from
+  anywhere else aren't fetched, and images embedded in the message always
+  show. Loaded images are cached in `~/.local/state/heypad/images`.
 - **Triage** gives Claude each new thread's sender, subject and preview,
   tells it to treat them as untrusted data, and lets it mark threads seen
   only after you approve exactly which. It can't send, reply, delete or move

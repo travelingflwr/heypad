@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
 )
 
@@ -137,6 +136,7 @@ type renderer struct {
 	// triage is an agent's verdict on threads, by box item ID, shown as a
 	// chip on each row.
 	triage map[int64]TriageItem
+	imgs   *imageCache // images in mail; nil draws none
 }
 
 // tinted is c at opacity a over the background: see-through on a clear
@@ -189,40 +189,11 @@ func (r *renderer) paint(img *image.RGBA) {
 func (r *renderer) face(size float64, bold bool) font.Face { return r.fonts.face(bold, size*r.scale) }
 
 // clean drops what the font can't draw and folds whitespace to single spaces.
-func (r *renderer) clean(s string, bold bool) string {
-	var b strings.Builder
-	space := false
-	for _, c := range s {
-		if unicode.IsSpace(c) {
-			space = b.Len() > 0
-			continue
-		}
-		if !r.fonts.has(bold, c) {
-			continue
-		}
-		if space {
-			b.WriteByte(' ')
-			space = false
-		}
-		b.WriteRune(c)
-	}
-	return b.String()
-}
+func (r *renderer) clean(s string, bold bool) string { return r.cleanStyled(s, styleOf(bold)) }
 
 // width is how wide s (already clean) draws, in points.
 func (r *renderer) width(s string, size float64, bold bool) float64 {
-	face := r.face(size, bold)
-	var w fixed.Int26_6
-	prev := rune(-1)
-	for _, c := range s {
-		if prev >= 0 {
-			w += face.Kern(prev, c)
-		}
-		adv, _ := face.GlyphAdvance(c)
-		w += adv
-		prev = c
-	}
-	return float64(w) / 64 / r.scale
+	return r.widthStyled(s, size, styleOf(bold))
 }
 
 // fit cuts s (already clean) with an ellipsis to fit maxW points.
@@ -257,23 +228,7 @@ func (r *renderer) textRight(img *image.RGBA, s string, x, y, size float64, bold
 }
 
 func (r *renderer) drawRaw(img *image.RGBA, s string, x, y, size float64, bold bool, col color.RGBA) float64 {
-	face := r.face(size, bold)
-	src := image.NewUniform(col)
-	dot := fixed.Point26_6{X: fixed.Int26_6(x * r.scale * 64), Y: fixed.Int26_6(math.Round(y*r.scale) * 64)}
-	start := dot.X
-	prev := rune(-1)
-	for _, c := range s {
-		if prev >= 0 {
-			dot.X += face.Kern(prev, c)
-		}
-		dr, mask, mp, adv, ok := face.Glyph(dot, c)
-		if ok {
-			draw.DrawMask(img, dr, src, image.Point{}, mask, mp, draw.Over)
-		}
-		dot.X += adv
-		prev = c
-	}
-	return float64(dot.X-start) / 64 / r.scale
+	return r.drawStyled(img, s, x, y, size, styleOf(bold), col)
 }
 
 // wrap breaks s into lines that fit maxW points. "\n" in s is a hard break;
@@ -647,10 +602,12 @@ const (
 	itemTextRight
 	itemAvatar
 	itemRect
+	itemFill  // a rounded rect (corner radius in size) in role's color at tint opacity
+	itemImage // an image from x, y to x1, y1
 )
 
 // docItem is one thing the reader draws: a line of text (baseline at y), an
-// avatar (centered at x, y), or a rect (x, y to x1, y1).
+// avatar (centered at x, y), a rect or fill, or an image (x, y to x1, y1).
 type docItem struct {
 	kind    itemKind
 	x, y    float64
@@ -658,12 +615,17 @@ type docItem struct {
 	text    string
 	size    float64
 	bold    bool
+	style   fstyle // text's font when bold isn't set
+	strike  bool
+	tint    float64
 	role    role
 	contact Contact
+	src     string // an image's source
 }
 
 type doc struct {
 	items  []docItem
+	links  []linkHit
 	height float64
 }
 
@@ -720,32 +682,7 @@ func (r *renderer) layoutThread(p Posting, entries []Entry, widthPt float64, not
 		}
 		y += 40
 
-		paras := cleanBody(firstNonEmpty(e.Body, e.Summary))
-		for _, pr := range paras {
-			x, w, size, bold, ro, lh := pad, maxW, bodySize, false, roleText, bodyLineH
-			switch pr.kind {
-			case paraQuote:
-				x, w, ro = pad+12, maxW-12, roleGray
-			case paraHeading:
-				size, bold, lh = 15, true, 21
-			case paraBullet:
-				x, w = pad+14, maxW-14
-				add(docItem{kind: itemText, x: pad + 2, y: y + 14, text: "•", size: size})
-			}
-			lines := r.wrap(pr.text, size, bold, w)
-			if len(lines) == 0 {
-				continue
-			}
-			top := y
-			for _, ln := range lines {
-				add(docItem{kind: itemText, x: x, y: y + 14, text: ln, size: size, bold: bold, role: ro})
-				y += lh
-			}
-			if pr.kind == paraQuote {
-				add(docItem{kind: itemRect, x: pad + 2, y: top + 2, x1: pad + 4, y1: y - 2, role: roleFaint})
-			}
-			y += paraGap
-		}
+		y = r.layoutBlocks(d, parseRich(firstNonEmpty(e.Body, e.Summary)), pad, maxW, y)
 	}
 	d.height = y + 24
 	return d
@@ -763,8 +700,15 @@ func (r *renderer) drawDoc(img *image.RGBA, d *doc, offset float64) {
 			}
 			if it.kind == itemTextRight {
 				r.textRight(img, it.text, it.x, y, it.size, it.bold, r.color(it.role))
-			} else {
-				r.drawRaw(img, it.text, it.x, y, it.size, it.bold, r.color(it.role))
+				continue
+			}
+			st := it.style
+			if it.bold {
+				st = fsBold
+			}
+			w := r.drawStyled(img, it.text, it.x, y, it.size, st, r.color(it.role))
+			if it.strike {
+				r.fillRect(img, it.x, y-it.size*0.3, it.x+w, y-it.size*0.3+0.9, r.color(it.role))
 			}
 		case itemAvatar:
 			if y < -40 || y > viewH+40 {
@@ -780,6 +724,16 @@ func (r *renderer) drawDoc(img *image.RGBA, d *doc, offset float64) {
 				col = r.pal.faint // a quote's bar
 			}
 			r.fillRect(img, it.x, y, it.x1, it.y1-offset, col)
+		case itemFill:
+			if it.y1-offset < 0 || y > viewH {
+				continue
+			}
+			r.fillRoundRect(img, it.x, y, it.x1, it.y1-offset, it.size, r.tinted(r.color(it.role), it.tint))
+		case itemImage:
+			if it.y1-offset < 0 || y > viewH {
+				continue
+			}
+			r.drawImage(img, it, offset)
 		}
 	}
 }

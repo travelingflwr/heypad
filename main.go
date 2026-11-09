@@ -165,7 +165,7 @@ func runRender(args []string) error {
 			title = b.title
 		}
 	}
-	r := &renderer{fonts: fonts, scale: *scale, pal: pal, now: time.Now()}
+	r := &renderer{fonts: fonts, scale: *scale, pal: pal, now: time.Now(), imgs: newImageCache(nil)}
 	if *demo {
 		r.triage = demoTriage()
 	}
@@ -193,6 +193,9 @@ func runRender(args []string) error {
 			}
 		}
 		r.drawHeader(hImg, header{left: "‹ " + title, leftRole: roleAccent, right: "r reply   a ask Claude   O open", rightRole: roleFaint})
+		// Lay out once to start the images loading, then again with them.
+		r.layoutThread(p, entries, *width, "")
+		r.imgs.wait(20 * time.Second)
 		r.drawDoc(bImg, r.layoutThread(p, entries, *width, ""), 0)
 	} else {
 		// --fresh N marks the first N as New For You; --floating draws only

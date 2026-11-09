@@ -61,6 +61,7 @@ const (
 	resNote
 	resSeen    // a bulk mark-seen finished
 	resRefresh // something outside (the triage agent) may have changed the box
+	resImage   // an image in a message finished loading
 )
 
 type result struct {
@@ -184,6 +185,9 @@ func runView(opt viewOptions) error {
 	snap := make(chan os.Signal, 1)
 	signal.Notify(snap, syscall.SIGUSR1)
 	results := make(chan result, 32)
+	imgs := newImageCache(func(src string) { go func() { results <- result{kind: resImage, msg: src} }() })
+	// Images finishing together lay the thread out once, not once each.
+	var imgSettle <-chan time.Time
 
 	// --- state ----------------------------------------------------------
 
@@ -399,7 +403,7 @@ func runView(opt viewOptions) error {
 		return math.Max(0, contentHeight(r, g)-g.viewH())
 	}
 	newRenderer := func(g geom) *renderer {
-		return &renderer{fonts: fonts, scale: g.scale, pal: drawPal(), clear: clear, now: time.Now(), triage: triage}
+		return &renderer{fonts: fonts, scale: g.scale, pal: drawPal(), clear: clear, now: time.Now(), triage: triage, imgs: imgs}
 	}
 
 	// keepSelVisible scrolls the list so the selected row shows with some
@@ -1078,6 +1082,17 @@ func runView(opt viewOptions) error {
 			}
 			return
 		}
+		if screen == screenThread && th != nil && docv != nil {
+			px := float64(c.x - 1)
+			if c.x <= g.ws.cols && c.y <= g.ws.rows {
+				px = float64((c.x-1)*g.cellW + g.cellW/2)
+			}
+			if u := docv.linkAt(px/g.scale, (py-float64(g.hdrPx))/g.scale+shown); u != "" {
+				openURL(u)
+				setStatus("Opened "+shortURL(u), roleGray)
+			}
+			return
+		}
 		if screen != screenList {
 			return
 		}
@@ -1137,6 +1152,12 @@ func runView(opt viewOptions) error {
 			}
 		case <-winch:
 			draw(true)
+		case <-imgSettle:
+			imgSettle = nil
+			if th != nil {
+				th.ver++
+				draw(false)
+			}
 		case res := <-results:
 			switch res.kind {
 			case resBox:
@@ -1177,6 +1198,10 @@ func runView(opt viewOptions) error {
 						}
 					}
 					setTitle()
+				}
+			case resImage:
+				if th != nil && imgSettle == nil {
+					imgSettle = time.After(80 * time.Millisecond)
 				}
 			case resThread:
 				if th != nil && th.post.TopicID == res.topic {
