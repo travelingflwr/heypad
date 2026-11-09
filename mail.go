@@ -187,6 +187,36 @@ func setSeenIDs(ids []int64) error {
 	return nil
 }
 
+// trashIDs moves threads to the trash: HEY's with `hey trash`, other
+// accounts' to their trash folder.
+func trashIDs(ids []int64) error {
+	var hey, other []int64
+	for _, id := range ids {
+		if isIMAPTopic(id) {
+			other = append(other, id)
+		} else {
+			hey = append(hey, id)
+		}
+	}
+	if len(other) > 0 {
+		if err := trashIMAP(other); err != nil {
+			return err
+		}
+	}
+	for len(hey) > 0 {
+		n := min(50, len(hey))
+		args := []string{"trash"}
+		for _, id := range hey[:n] {
+			args = append(args, fmt.Sprint(id))
+		}
+		if _, err := heyJSON(args...); err != nil {
+			return err
+		}
+		hey = hey[n:]
+	}
+	return nil
+}
+
 // sendFor sends (or saves as a draft) a reply to thread reply, or a new
 // message from account acct ("" for HEY).
 func sendFor(acct, reply, to, subject, body string, draft bool) error {

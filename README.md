@@ -103,6 +103,7 @@ heypad view           # run it in this pane
 | `x` | mark a thread (and move down) |
 | `X` | mark this thread and every new one below it |
 | `e` | mark seen: the marked threads, or this one, after a yes |
+| `#` `Delete` | move to Trash: the marked threads, or this one (also from an open thread), after a yes. HEY threads go to HEY's Trash, iCloud's to Deleted Messages |
 | `A` | triage New For You with Claude |
 | `n` `p` | next or previous thread |
 | `r` | reply |

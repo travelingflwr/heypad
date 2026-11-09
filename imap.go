@@ -763,6 +763,42 @@ func markIMAPSeen(ids []int64) error {
 	return nil
 }
 
+// trashIMAP moves threads to their account's trash folder.
+func trashIMAP(ids []int64) error {
+	type place struct{ acct, mailbox string }
+	byPlace := map[place][]imap.UID{}
+	for _, id := range ids {
+		t, ok := lookupThread(id)
+		if !ok {
+			return errors.New("heypad doesn't know one of these threads any more; refresh the box")
+		}
+		k := place{t.Account, t.Mailbox}
+		for _, u := range t.UIDs {
+			byPlace[k] = append(byPlace[k], imap.UID(u))
+		}
+	}
+	for k, uids := range byPlace {
+		s, err := session(k.acct)
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(k.mailbox, s.acct.trash()) {
+			continue // already there
+		}
+		err = s.run(func(c *imapclient.Client) error {
+			if _, err := s.selectBox(c, k.mailbox, false); err != nil {
+				return err
+			}
+			_, err := c.Move(imap.UIDSetNum(uids...), s.acct.trash()).Wait()
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // appendMessage saves msg in a folder, as sent mail or a draft.
 func appendMessage(a account, mailbox string, msg []byte, flags []imap.Flag) error {
 	s, err := session(a.Name)

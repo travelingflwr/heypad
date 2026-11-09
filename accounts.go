@@ -29,7 +29,10 @@ type account struct {
 	Folders []folder `json:"folders"` // the boxes heypad shows, in order
 	Sent    string   `json:"sent"`    // where sent mail is copied
 	Drafts  string   `json:"drafts"`  // where drafts are saved
+	Trash   string   `json:"trash"`   // where deleted mail goes
 }
+
+func (a account) trash() string { return firstNonEmpty(a.Trash, "Deleted Messages") }
 
 type folder struct {
 	Mailbox string `json:"mailbox"`
@@ -49,6 +52,7 @@ var presets = map[string]account{
 		},
 		Sent:   "Sent Messages",
 		Drafts: "Drafts",
+		Trash:  "Deleted Messages",
 	},
 }
 

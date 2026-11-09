@@ -60,6 +60,7 @@ const (
 	resWrite
 	resNote
 	resSeen    // a bulk mark-seen finished
+	resTrash   // threads went to the trash
 	resRefresh // something outside (the triage agent) may have changed the box
 	resImage   // an image in a message finished loading
 )
@@ -241,8 +242,11 @@ func runView(opt viewOptions) error {
 		// waiting on a yes while confirming.
 		marked      = map[int64]bool{}
 		confirmSeen []int64
-		markIDs     []int // the check images over marked avatars
-		markKey     string
+		// confirmTrash: confirmSeen's threads are going to the trash, not
+		// being marked seen.
+		confirmTrash bool
+		markIDs      []int // the check images over marked avatars
+		markKey      string
 
 		// Triage: an agent's verdicts, reloaded when its file changes.
 		triage      = loadTriage()
@@ -314,6 +318,20 @@ func runView(opt viewOptions) error {
 		}
 		posts[k] = slices.Insert(list, at, p)
 		vers[k]++
+	}
+	// dropNow takes threads out of every box they're listed in.
+	dropNow := func(ids []int64) {
+		gone := map[int64]bool{}
+		for _, id := range ids {
+			gone[id] = true
+		}
+		for k, list := range posts {
+			kept := slices.DeleteFunc(slices.Clone(list), func(p Posting) bool { return gone[p.ID] })
+			if len(kept) != len(list) {
+				posts[k] = kept
+				vers[k]++
+			}
+		}
 	}
 	sel := func() int {
 		n := len(cur())
@@ -461,12 +479,14 @@ func runView(opt viewOptions) error {
 				h.right = "Tab next box   c compose"
 			}
 		}
-		if screen == screenList {
+		if confirmSeen != nil && confirmTrash {
+			h.right, h.rightRole = fmt.Sprintf("Move %d to Trash?   y yes   n no", len(confirmSeen)), roleAccent
+		} else if screen == screenList {
 			switch {
 			case confirmSeen != nil:
 				h.right, h.rightRole = fmt.Sprintf("Mark %d seen?   y yes   n no", len(confirmSeen)), roleAccent
 			case len(marked) > 0:
-				h.right, h.rightRole = fmt.Sprintf("%d marked   e mark seen   Esc clear", len(marked)), roleAccent
+				h.right, h.rightRole = fmt.Sprintf("%d marked   e mark seen   # trash   Esc clear", len(marked)), roleAccent
 			}
 		}
 		if status != "" && time.Now().Before(statusUntil) && confirmSeen == nil {
@@ -884,6 +904,15 @@ func runView(opt viewOptions) error {
 	confirmed := func() {
 		ids := confirmSeen
 		confirmSeen = nil
+		if confirmTrash {
+			confirmTrash = false
+			setStatus(fmt.Sprintf("Moving %d to Trash…", len(ids)), roleFaint)
+			draw(false)
+			go func() {
+				results <- result{kind: resTrash, box: kind(), ids: ids, err: trashIDs(ids)}
+			}()
+			return
+		}
 		setStatus(fmt.Sprintf("Marking %d seen…", len(ids)), roleFaint)
 		draw(false)
 		go func() {
@@ -936,7 +965,7 @@ func runView(opt viewOptions) error {
 			case k.is('y', 0) || k.is(keyEnter, 0):
 				confirmed()
 			case k.is('n', 0) || k.is(keyEscape, 0) || k.is('q', 0):
-				confirmSeen = nil
+				confirmSeen, confirmTrash = nil, false
 				draw(false)
 			}
 			return false
@@ -968,6 +997,9 @@ func runView(opt viewOptions) error {
 				ask(th.post)
 			case k.is('c', 0):
 				write(nil)
+			case k.is('#', 0) || k.is('#', modShift) || k.is('3', modShift) || k.is(keyDelete, 0):
+				confirmSeen, confirmTrash = []int64{th.post.ID}, true
+				draw(false)
 			case k.is('O', 0) || k.is('o', modShift):
 				openURL(th.post.AppURL)
 			case k.is('R', 0) || k.is('r', modShift) || k.is('l', modCtrl):
@@ -1017,6 +1049,18 @@ func runView(opt viewOptions) error {
 			}
 			if len(ids) > 0 {
 				confirmSeen = ids
+				draw(false)
+			}
+		case k.is('#', 0) || k.is('#', modShift) || k.is('3', modShift) || k.is(keyDelete, 0):
+			// The marked threads, or the selected one.
+			ids := markedIDs()
+			if len(ids) == 0 {
+				if p, ok := selected(); ok {
+					ids = []int64{p.ID}
+				}
+			}
+			if len(ids) > 0 {
+				confirmSeen, confirmTrash = ids, true
 				draw(false)
 			}
 		case k.is('A', 0) || k.is('a', modShift):
@@ -1248,6 +1292,22 @@ func runView(opt viewOptions) error {
 					sels[kind()] = min(sel(), max(0, len(cur())-1))
 					keepSelVisible()
 				}
+				setTitle()
+			case resTrash:
+				if res.err != nil {
+					setStatus("Couldn't move them to Trash: "+res.err.Error(), roleGray)
+					break
+				}
+				dropNow(res.ids)
+				for _, id := range res.ids {
+					delete(marked, id)
+				}
+				if screen == screenThread && th != nil && slices.Contains(res.ids, th.post.ID) {
+					back()
+				}
+				setStatus(fmt.Sprintf("Moved %d to Trash", len(res.ids)), roleAccent)
+				sels[kind()] = min(sel(), max(0, len(cur())-1))
+				keepSelVisible()
 				setTitle()
 			case resRefresh:
 				fetchBoxAsync(res.box)

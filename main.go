@@ -44,6 +44,7 @@ In the viewer
                (the floating window starts with only what's new)
   x            mark a thread     X   mark it and every new one below
   e            mark seen (the marked ones, or this one), after a yes
+  #, Delete    move to Trash (the marked ones, or this one), after a yes
   A            triage New For You with Claude
 
 Mail comes from the hey CLI (https://github.com/basecamp/hey-cli); sign in
