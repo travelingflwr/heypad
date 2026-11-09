@@ -31,6 +31,7 @@ func runWrite(args []string) error {
 	reply := fs.String("reply", "", "thread ID to reply to")
 	subject := fs.String("subject", "", "the thread's subject, or a new message's")
 	to := fs.String("to", "", "who it goes to")
+	acct := fs.String("account", "", "send a new message from this account instead of HEY")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,7 +50,7 @@ func runWrite(args []string) error {
 		return strings.TrimSpace(line)
 	}
 
-	fmt.Print("\x1b]2;HEY\x07\x1b[H\x1b[2J")
+	fmt.Printf("\x1b]2;%s\x07\x1b[H\x1b[2J", firstNonEmpty(*acct, "HEY"))
 	if *reply != "" {
 		fmt.Printf("%sReply%s %sto %s%s\n%s%s%s\n\n", ansiBold+ansiBlue, ansiReset, ansiDim, *to, ansiReset, ansiBold, *subject, ansiReset)
 	} else {
@@ -87,7 +88,7 @@ func runWrite(args []string) error {
 		choice := strings.ToLower(ask("Send it? [s]end, [e]dit, save as [d]raft, [c]ancel:"))
 		switch {
 		case strings.HasPrefix(choice, "s") || choice == "y" || choice == "yes":
-			if err := sendMail(*reply, *to, *subject, body, false); err != nil {
+			if err := sendFor(*acct, *reply, *to, *subject, body, false); err != nil {
 				res.Message = "Not sent: " + err.Error()
 				return pause(res.Message, true)
 			}
@@ -96,7 +97,7 @@ func runWrite(args []string) error {
 			time.Sleep(700 * time.Millisecond)
 			return nil
 		case strings.HasPrefix(choice, "d"):
-			if err := sendMail(*reply, *to, *subject, body, true); err != nil {
+			if err := sendFor(*acct, *reply, *to, *subject, body, true); err != nil {
 				res.Message = "Draft not saved: " + err.Error()
 				return pause(res.Message, true)
 			}

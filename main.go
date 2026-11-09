@@ -29,6 +29,8 @@ Usage: heypad COMMAND [ARGS]
   render -o FILE.png [--box KIND] [--thread N] [--width PT] [--height PT] [--theme light|dark]
                              draw a screen to a PNG
   rex-install [--bind KEY]   write the Rex palette actions (~/.config/rex/heypad.lua)
+  account add icloud --user LOGIN [--from ADDRESS]
+                             add an iCloud Mail account (see heypad account)
 
 Themes: terminal (follow Rex's theme, the default), light, dark.
 
@@ -106,6 +108,8 @@ func run(args []string) error {
 			return err
 		}
 		return runView(viewOptions{theme: *theme, scale: *scale, floating: *floating})
+	case "account":
+		return runAccount(args)
 	case "write":
 		return runWrite(args)
 	case "render":
@@ -155,11 +159,12 @@ func runRender(args []string) error {
 		posts = demoPosts(time.Now())
 	}
 	if len(posts) == 0 {
-		if posts, err = fetchBox(*kind, 0); err != nil {
+		if posts, err = loadBox(*kind, 0); err != nil {
 			return err
 		}
 	}
 	title := *kind
+	boxes = append(boxes, accountBoxes()...)
 	for _, b := range boxes {
 		if b.kind == *kind {
 			title = b.title
@@ -188,7 +193,7 @@ func runRender(args []string) error {
 			entries = demoThread(p)
 		}
 		if len(entries) == 0 {
-			if entries, err = fetchThread(p.TopicID); err != nil {
+			if entries, err = loadThread(p.TopicID); err != nil {
 				return err
 			}
 		}

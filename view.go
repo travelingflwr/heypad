@@ -124,6 +124,7 @@ func runView(opt viewOptions) error {
 	if err != nil {
 		return err
 	}
+	boxes = append(boxes, accountBoxes()...)
 	in, out := int(os.Stdin.Fd()), os.Stdout
 	var saved *term.State
 	if term.IsTerminal(in) {
@@ -257,7 +258,7 @@ func runView(opt viewOptions) error {
 		posts[b.kind] = cachedBox(b.kind)
 	}
 	kind := func() string { return boxes[boxIdx].kind }
-	onlyNew := func(k string) bool { return k == "imbox" && !showAll }
+	onlyNew := func(k string) bool { return isInbox(k) && !showAll }
 	visible := func(k string) []Posting {
 		if !onlyNew(k) {
 			return posts[k]
@@ -271,7 +272,7 @@ func runView(opt viewOptions) error {
 		return out
 	}
 	cur := func() []Posting { return visible(kind()) }
-	lay := func() listLayout { return layoutList(cur(), kind() == "imbox" && showAll) }
+	lay := func() listLayout { return layoutList(cur(), isInbox(kind()) && showAll) }
 	top := func(i int) float64 {
 		if l := lay(); i >= 0 && i < len(l.tops) {
 			return l.tops[i]
@@ -332,12 +333,15 @@ func runView(opt viewOptions) error {
 		status, statusRole, statusUntil = msg, ro, time.Now().Add(5*time.Second)
 	}
 	setTitle := func() {
-		t := "HEY · " + boxes[boxIdx].title
+		t := windowTitle(boxes[boxIdx])
 		if n := newIn(kind()); n > 0 {
 			t += fmt.Sprintf(" (%d)", n)
 		}
 		if screen == screenThread && th != nil {
 			t = "HEY · " + th.post.Subject
+			if a := boxAccount(kind()); a != "" {
+				t = a + " · " + th.post.Subject
+			}
 		}
 		fmt.Fprintf(w, "\x1b]2;%s\x07", t)
 	}
@@ -348,13 +352,13 @@ func runView(opt viewOptions) error {
 		}
 		loading[k] = true
 		go func() {
-			p, err := fetchBox(k, newIn(k))
+			p, err := loadBox(k, newIn(k))
 			results <- result{kind: resBox, box: k, posts: p, err: err}
 		}()
 	}
 	fetchThreadAsync := func(topic int64) {
 		go func() {
-			e, err := fetchThread(topic)
+			e, err := loadThread(topic)
 			results <- result{kind: resThread, topic: topic, entries: e, err: err}
 		}()
 	}
@@ -449,9 +453,9 @@ func runView(opt viewOptions) error {
 				h.right, h.rightRole = errs[kind()], roleGray
 			case loading[kind()]:
 				h.right = "Updating…"
-			case opt.floating && kind() == "imbox" && showAll:
+			case opt.floating && isInbox(kind()) && showAll:
 				h.right = "s new only   c compose"
-			case opt.floating && kind() == "imbox":
+			case opt.floating && isInbox(kind()):
 				h.right = "s all mail   c compose"
 			default:
 				h.right = "Tab next box   c compose"
@@ -739,7 +743,7 @@ func runView(opt viewOptions) error {
 		startAnim()
 		setTitle()
 		fetchThreadAsync(p.TopicID)
-		go markSeen(p)
+		go setSeen(p)
 		draw(false)
 	}
 	// settleRead files the thread just read under Previously Seen. In the
@@ -808,6 +812,8 @@ func runView(opt viewOptions) error {
 			args := []string{"write"}
 			if p != nil {
 				args = append(args, "--reply", fmt.Sprint(p.TopicID), "--subject", p.Subject, "--to", p.sender())
+			} else if a := boxAccount(kind()); a != "" {
+				args = append(args, "--account", a)
 			}
 			suspend(func() {
 				cmd := exec.Command(self, args...)
@@ -819,7 +825,7 @@ func runView(opt viewOptions) error {
 			}
 			return
 		}
-		block, token, err := openWriter(p)
+		block, token, err := openWriter(p, boxAccount(kind()))
 		if err != nil {
 			setStatus(err.Error(), roleGray)
 			draw(false)
@@ -854,7 +860,7 @@ func runView(opt viewOptions) error {
 		go func() {
 			if len(entries) == 0 {
 				var err error
-				if entries, err = fetchThread(p.TopicID); err != nil {
+				if entries, err = loadThread(p.TopicID); err != nil {
 					results <- result{kind: resNote, msg: "Couldn't load the thread: " + err.Error()}
 					return
 				}
@@ -881,7 +887,7 @@ func runView(opt viewOptions) error {
 		setStatus(fmt.Sprintf("Marking %d seen…", len(ids)), roleFaint)
 		draw(false)
 		go func() {
-			results <- result{kind: resSeen, box: kind(), ids: ids, err: markSeenIDs(ids)}
+			results <- result{kind: resSeen, box: kind(), ids: ids, err: setSeenIDs(ids)}
 		}()
 	}
 	triageNow := func() {
@@ -981,7 +987,7 @@ func runView(opt viewOptions) error {
 			} else if opt.floating {
 				minimizeSelf()
 			}
-		case k.is('x', 0) && kind() == "imbox":
+		case k.is('x', 0) && isInbox(kind()):
 			if p, ok := selected(); ok {
 				if marked[p.ID] {
 					delete(marked, p.ID)
@@ -994,7 +1000,7 @@ func runView(opt viewOptions) error {
 					draw(false)
 				}
 			}
-		case (k.is('X', 0) || k.is('x', modShift)) && kind() == "imbox":
+		case (k.is('X', 0) || k.is('x', modShift)) && isInbox(kind()):
 			// This one and every new thread below it: older than here.
 			for _, p := range cur()[sel():] {
 				if p.New {
@@ -1002,7 +1008,7 @@ func runView(opt viewOptions) error {
 				}
 			}
 			draw(false)
-		case k.is('e', 0) && kind() == "imbox":
+		case k.is('e', 0) && isInbox(kind()):
 			ids := markedIDs()
 			if len(ids) == 0 {
 				if p, ok := selected(); ok && p.New {
@@ -1047,7 +1053,7 @@ func runView(opt viewOptions) error {
 			}
 		case k.is('c', 0):
 			write(nil)
-		case k.is('s', 0) && kind() == "imbox":
+		case k.is('s', 0) && isInbox(kind()):
 			// Between only what's new and the whole Imbox, on the same thread.
 			var id int64
 			if p, ok := selected(); ok {
@@ -1173,7 +1179,7 @@ func runView(opt viewOptions) error {
 					anchorTop := 0.0
 					if old := visible(res.box); len(old) > 0 {
 						keep = old[max(0, min(sels[res.box], len(old)-1))].ID
-						anchor, anchorTop = old[0].ID, layoutList(old, res.box == "imbox" && showAll).tops[0]
+						anchor, anchorTop = old[0].ID, layoutList(old, isInbox(res.box) && showAll).tops[0]
 					}
 					posts[res.box], errs[res.box] = res.posts, ""
 					vers[res.box]++

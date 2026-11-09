@@ -98,7 +98,7 @@ heypad view           # run it in this pane
 | `j` `k` `↑` `↓` | move, or scroll a thread |
 | `Enter` `o` | open the thread |
 | `Esc` `h` | back to the list; on the list, clear marks or minimize the floating window |
-| `Tab` `1`–`6` | switch boxes |
+| `Tab` `1`–`9` | switch boxes |
 | `s` | in the Imbox, only what's new, or both sections |
 | `x` | mark a thread (and move down) |
 | `X` | mark this thread and every new one below it |
@@ -112,7 +112,34 @@ heypad view           # run it in this pane
 | `R` | refresh |
 | `q` | quit |
 
-Clicking a thread opens it; clicking the header goes back.
+Clicking a thread opens it; clicking the header goes back. Clicking a link
+in a message opens it.
+
+### Other accounts (iCloud)
+
+heypad can show an iCloud Mail account beside HEY, read over IMAP and sent
+through SMTP. Its Inbox gets the same two sections as HEY's Imbox (New For
+You for anything unread, then Previously Seen), and its Inbox, Archive and
+Sent come after HEY's boxes (`Tab` or the number keys).
+
+1. Make an app-specific password at [account.apple.com](https://account.apple.com)
+   (Sign-In and Security, App-Specific Passwords).
+2. Add the account. The login is your iCloud Mail address, even if your
+   Apple ID is another address. `--from` takes your addresses, comma
+   separated, the first being what new mail is sent from; replies go out
+   from whichever of them the message was sent to.
+
+   ```sh
+   heypad account add icloud --user you@icloud.com --from you@yourdomain.com,you@icloud.com
+   ```
+
+The password goes in the macOS Keychain (service `heypad`), never in a file;
+the account's settings are in `~/.config/heypad/accounts.json`. `heypad
+account list` and `heypad account remove iCloud` manage them.
+
+Images in iCloud mail come straight from the sender's server, which would
+tell them you opened it, so heypad doesn't load them; images inside the
+message itself show.
 
 ## How it works
 
