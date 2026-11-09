@@ -6,7 +6,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +47,9 @@ type Posting struct {
 	// ObservedAt is when the thread last landed in this box section: HEY
 	// orders each section of the Imbox by it, newest first.
 	ObservedAt time.Time `json:"observed_at"`
+	// Seen is HEY's: true once the thread is in Previously Seen. HEY leaves
+	// it out for New For You.
+	Seen bool `json:"seen"`
 	// New is heypad's: the thread is in the Imbox's New For You section,
 	// which is what HEY counts as unread.
 	New bool `json:"heypad_new"`
@@ -164,11 +166,9 @@ func cachedThread(topic int64) []Entry {
 	return e
 }
 
-// boxPage is one fetch of a box: its threads, and the section ("seen" or
-// "unseen") that the next page would start in, from HEY's page cursor.
+// boxPage is one fetch of a box: its threads.
 type boxPage struct {
-	posts       []Posting
-	nextSection string
+	posts []Posting
 }
 
 func fetchBoxPage(kind string, limit int) (boxPage, error) {
@@ -180,7 +180,6 @@ func fetchBoxPage(kind string, limit int) (boxPage, error) {
 		OK   bool `json:"ok"`
 		Data struct {
 			Postings []Posting `json:"postings"`
-			NextPage string    `json:"next_page"`
 		} `json:"data"`
 		Error string `json:"error"`
 	}
@@ -190,48 +189,23 @@ func fetchBoxPage(kind string, limit int) (boxPage, error) {
 	if !env.OK {
 		return boxPage{}, errors.New(firstNonEmpty(env.Error, "hey reported an error"))
 	}
-	return boxPage{env.Data.Postings, cursorSection(env.Data.NextPage)}, nil
-}
-
-// cursorSection reads the Imbox section out of a HEY page cursor, which is
-// base64 JSON like {"page_number":2,"values":{"seen":"unseen",...}}.
-func cursorSection(cursor string) string {
-	if cursor == "" {
-		return ""
-	}
-	var data []byte
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
-		if d, err := enc.DecodeString(cursor); err == nil {
-			data = d
-			break
-		}
-	}
-	var c struct {
-		Values struct {
-			Seen string `json:"seen"`
-		} `json:"values"`
-	}
-	if json.Unmarshal(data, &c) != nil {
-		return ""
-	}
-	return c.Values.Seen
+	return boxPage{env.Data.Postings}, nil
 }
 
 // newCount is how many of the Imbox's first threads are in New For You.
-// The Imbox lists New For You, then Previously Seen, each newest first by
-// ObservedAt, so the one place that order goes back up is where Previously
-// Seen begins. With no such place, everything fetched is in one section,
-// and the page cursor says which (next is where the next page starts).
-func newCount(posts []Posting, next string) int {
-	for i := 1; i < len(posts); i++ {
-		if posts[i].ObservedAt.After(posts[i-1].ObservedAt) {
+// The Imbox lists New For You, then Previously Seen, and HEY flags each
+// posting in Previously Seen as seen, so New For You is the run of
+// unflagged threads at the top. (Ordering alone can't find the boundary:
+// when everything new is newer than everything seen, the two sections read
+// as one newest-first run.) If the whole page is unflagged, there may be
+// more New For You past it.
+func newCount(posts []Posting) int {
+	for i, p := range posts {
+		if p.Seen {
 			return i
 		}
 	}
-	if next == "unseen" {
-		return len(posts) // all new, and maybe more past what was fetched
-	}
-	return 0 // all caught up (or a box too small to have a next page)
+	return len(posts)
 }
 
 const (
@@ -257,7 +231,7 @@ func fetchBox(kind string, hint int) ([]Posting, error) {
 		if err != nil {
 			return nil, err
 		}
-		n := newCount(pg.posts, pg.nextSection)
+		n := newCount(pg.posts)
 		fetchedAll := len(pg.posts) < limit
 		if n < len(pg.posts) || fetchedAll || limit >= maxNew+seenToKeep {
 			posts := pg.posts[:min(len(pg.posts), n+seenToKeep)]
