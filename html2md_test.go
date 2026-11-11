@@ -158,3 +158,17 @@ func TestTermSafe(t *testing.T) {
 		t.Errorf("termSafe: %q", got)
 	}
 }
+
+func TestLinkTarget(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://Example.com/a/b":                        "example.com/a/b",
+		"https://bank.example@evil.example/login":        "evil.example/login",
+		"http://example.com/":                            "http://example.com (not encrypted)",
+		"mailto:someone@example.com":                     "mail to someone@example.com",
+		"https://example.com/" + strings.Repeat("a", 60): "example.com/" + strings.Repeat("a", 26) + "…",
+	} {
+		if got := linkTarget(raw); got != want {
+			t.Errorf("linkTarget(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

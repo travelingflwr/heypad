@@ -324,11 +324,20 @@ func askAgent(p Posting, entries []Entry) (string, error) {
 // the web: a message could talk it into fetching an address that carries
 // your mail away. Claude Code is started without its web tools; another
 // agent (HEYPAD_AGENT) is started as it is.
-func agentArgs(path, prompt string) []string {
-	if filepath.Base(path) == "claude" {
-		return []string{path, "--disallowedTools", "WebFetch,WebSearch", "--", prompt}
+//
+// It also asks before each thing it does, whatever mode you normally run
+// in, and gets none of your connected services (which may well include
+// another way to send mail). allow lists the few things it may do without
+// asking, as Claude Code permission rules.
+func agentArgs(path, prompt string, allow ...string) []string {
+	if filepath.Base(path) != "claude" {
+		return []string{path, prompt}
 	}
-	return []string{path, prompt}
+	args := []string{path, "--permission-mode", "manual", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch"}
+	if len(allow) > 0 {
+		args = append(append(args, "--allowedTools"), allow...)
+	}
+	return append(args, "--", prompt)
 }
 
 func randToken() string {
@@ -370,6 +379,8 @@ My mail app is watching that file and shows each label on its row as soon as you
 Then give me a short summary: what needs me (most urgent first), and how many are worth a read or safe to skip. `+
 		`Ask before marking anything seen. Only when I approve a specific set, mark it with `+"`hey seen <box_item_id>...`"+` (many IDs per call). Never send, reply, delete, or move mail.`,
 		in, triagePath())
-	_, block, err := floatPane("Triage · New For You", paneCommand(agentArgs(path, prompt)...), rect{0.06, 0.05, 0.88, 0.88}, true)
+	_, block, err := floatPane("Triage · New For You", paneCommand(agentArgs(path, prompt,
+		// Its verdicts file, and reading a thread: neither sends or changes mail.
+		"Edit(/"+filepath.ToSlash(triagePath())+")", "Bash(hey thread read:*)")...), rect{0.06, 0.05, 0.88, 0.88}, true)
 	return block, err
 }

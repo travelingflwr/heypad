@@ -114,7 +114,7 @@ heypad view           # run it in this pane
 | `q` | quit |
 
 Clicking a thread opens it; clicking the header goes back. Clicking a link
-in a message opens it.
+in a message shows where it really goes; clicking it again opens it.
 
 ### Other accounts (iCloud)
 
@@ -170,6 +170,13 @@ message itself show.
   doesn't tell senders you opened their mail or where you are. Images from
   anywhere else aren't fetched, and images embedded in the message always
   show. Loaded images are cached in `~/.local/state/heypad/images`.
+- **Links** show their real address before they open, since a link's words
+  can say one place and lead to another. Only web and mail links open;
+  anything else a message links to (a file, another app) is refused.
+- **Agents that read mail are kept on a short lead.** Mail is text from
+  strangers, so Claude Code is started for Triage and Ask Claude without
+  its web tools or your connected services, and asks before each thing it
+  does, whatever mode you normally run it in.
 - **Triage** gives Claude each new thread's sender, subject and preview,
   tells it to treat them as untrusted data, and lets it mark threads seen
   only after you approve exactly which. It can't send, reply, delete or move

@@ -130,6 +130,30 @@ func safeURL(raw string) bool {
 	return false
 }
 
+// linkTarget is where a link really leads, for showing before it opens:
+// the server's name first (never the "user@" part some links put in front
+// of it to look like somewhere else), then the start of the path.
+func linkTarget(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if strings.EqualFold(u.Scheme, "mailto") {
+		return "mail to " + termSafe(firstNonEmpty(u.Opaque, u.Path))
+	}
+	out := strings.ToLower(u.Host)
+	if strings.EqualFold(u.Scheme, "http") {
+		out = "http://" + out + " (not encrypted)"
+	}
+	if rest := u.EscapedPath(); len(rest) > 1 {
+		if len(rest) > 28 {
+			rest = rest[:27] + "…"
+		}
+		out += rest
+	}
+	return out
+}
+
 // openURL opens a web page or mail address, and says whether it did.
 func openURL(raw string) bool {
 	if !safeURL(raw) {
@@ -1155,6 +1179,10 @@ func runView(opt viewOptions) error {
 		}
 		return false
 	}
+	var (
+		armedLink  string // the link whose address is showing, waiting for a second click
+		armedUntil time.Time
+	)
 	handleClick := func(c mouseClick) {
 		g := lastGeom
 		py := float64(c.y - 1)
@@ -1173,10 +1201,20 @@ func runView(opt viewOptions) error {
 				px = float64((c.x-1)*g.cellW + g.cellW/2)
 			}
 			if u := docv.linkAt(px/g.scale, (py-float64(g.hdrPx))/g.scale+shown); u != "" {
-				if openURL(u) {
-					setStatus("Opened "+shortURL(u), roleGray)
-				} else {
+				// A link's words can say one place and lead to another, so
+				// the first click shows where it goes and the second opens it.
+				switch {
+				case !safeURL(u):
+					armedLink = ""
 					setStatus("Not opened: heypad only opens web and mail links", roleGray)
+				case u == armedLink && time.Now().Before(armedUntil):
+					armedLink = ""
+					if openURL(u) {
+						setStatus("Opened "+linkTarget(u), roleGray)
+					}
+				default:
+					armedLink, armedUntil = u, time.Now().Add(8*time.Second)
+					status, statusRole, statusUntil = "Goes to "+linkTarget(u)+" · click again to open", roleGray, armedUntil
 				}
 			}
 			return
