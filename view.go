@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -109,15 +111,48 @@ func easeToward(shown, target float64, dt time.Duration, scale float64) float64 
 	return shown
 }
 
-func openURL(url string) {
-	if url == "" {
-		return
+// safeURL is whether a link is one heypad will hand to the system: a web
+// page or a mail address. A link in a message is the sender's text, and
+// `open` does much more than browse: file: runs apps and scripts already on
+// the disk, other schemes drive other apps, and anything starting with a
+// dash is read as an option to open itself.
+func safeURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || strings.ContainsFunc(raw, func(c rune) bool { return c < 0x20 || c == 0x7f }) {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return u.Host != ""
+	case "mailto":
+		return true
+	}
+	return false
+}
+
+// openURL opens a web page or mail address, and says whether it did.
+func openURL(raw string) bool {
+	if !safeURL(raw) {
+		return false
 	}
 	cmd := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		cmd = "open"
 	}
-	exec.Command(cmd, url).Start()
+	return exec.Command(cmd, raw).Start() == nil
+}
+
+// termSafe is s without control characters, for text from a message that
+// goes to the terminal as text (a title, a prompt) rather than drawn in a
+// picture. Left in, a subject could end the title early and send the
+// terminal commands of its own.
+func termSafe(s string) string {
+	return strings.Map(func(c rune) rune {
+		if c < 0x20 || c == 0x7f || c >= 0x80 && c < 0xa0 {
+			return -1
+		}
+		return c
+	}, s)
 }
 
 func runView(opt viewOptions) error {
@@ -361,7 +396,7 @@ func runView(opt viewOptions) error {
 				t = a + " · " + th.post.Subject
 			}
 		}
-		fmt.Fprintf(w, "\x1b]2;%s\x07", t)
+		fmt.Fprintf(w, "\x1b]2;%s\x07", termSafe(t))
 	}
 
 	fetchBoxAsync := func(k string) {
@@ -1138,8 +1173,11 @@ func runView(opt viewOptions) error {
 				px = float64((c.x-1)*g.cellW + g.cellW/2)
 			}
 			if u := docv.linkAt(px/g.scale, (py-float64(g.hdrPx))/g.scale+shown); u != "" {
-				openURL(u)
-				setStatus("Opened "+shortURL(u), roleGray)
+				if openURL(u) {
+					setStatus("Opened "+shortURL(u), roleGray)
+				} else {
+					setStatus("Not opened: heypad only opens web and mail links", roleGray)
+				}
 			}
 			return
 		}

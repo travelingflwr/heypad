@@ -129,3 +129,32 @@ func TestThreadKeyAndTopics(t *testing.T) {
 		t.Fatalf("splitKind: %q %q %v", name, mb, ok)
 	}
 }
+
+func TestSafeURL(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://example.com/a?b=c":            true,
+		"http://example.com":                   true,
+		"mailto:someone@example.com":           true,
+		"HTTPS://EXAMPLE.COM":                  true,
+		"file:///Applications/Calculator.app":  false,
+		"-aCalculator":                         false,
+		"-a Terminal":                          false,
+		"/Applications/Calculator.app":         false,
+		"x-apple.systempreferences:General":    false,
+		"smb://files.example/share":            false,
+		"javascript:alert(1)":                  false,
+		"https:///nohost":                      false,
+		"https://example.com/\x1b]2;title\x07": false,
+		"":                                     false,
+	} {
+		if got := safeURL(raw); got != want {
+			t.Errorf("safeURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestTermSafe(t *testing.T) {
+	if got := termSafe("Lunch?\x07\x1b]52;c;AAAA\x07 \u009b31m café"); got != "Lunch?]52;c;AAAA 31m café" {
+		t.Errorf("termSafe: %q", got)
+	}
+}

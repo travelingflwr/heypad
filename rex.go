@@ -271,7 +271,13 @@ func openWriter(p *Posting, acct string) (block, token string, err error) {
 	args := []string{self, "write", "--result", token}
 	label := "New message"
 	if p != nil {
-		args = append(args, "--reply", fmt.Sprint(p.TopicID), "--subject", p.Subject, "--to", p.sender())
+		to := p.sender()
+		// Show the address the reply really goes to: a message can name one
+		// person and ask for replies somewhere else.
+		if t, ok := lookupThread(p.TopicID); ok && t.ReplyTo != "" && !strings.Contains(to, t.ReplyTo) {
+			to += " <" + t.ReplyTo + ">"
+		}
+		args = append(args, "--reply", fmt.Sprint(p.TopicID), "--subject", p.Subject, "--to", to)
 		label = "Reply · " + p.Subject
 	} else if acct != "" {
 		args = append(args, "--account", acct)
@@ -309,8 +315,20 @@ func askAgent(p Posting, entries []Entry) (string, error) {
 			`Then ask whether I want you to draft a reply. If I do, show me the full draft as plain text for me to copy; `+
 			`don't try to send it yourself.`, file)
 	}
-	_, block, err := floatPane("Ask Claude · "+p.Subject, paneCommand(path, prompt), rect{0.08, 0.06, 0.84, 0.86}, true)
+	_, block, err := floatPane("Ask Claude · "+p.Subject, paneCommand(agentArgs(path, prompt)...), rect{0.08, 0.06, 0.84, 0.86}, true)
 	return block, err
+}
+
+// agentArgs is the command for an agent that reads mail. Mail is text from
+// strangers, and an agent that has read it shouldn't also be able to reach
+// the web: a message could talk it into fetching an address that carries
+// your mail away. Claude Code is started without its web tools; another
+// agent (HEYPAD_AGENT) is started as it is.
+func agentArgs(path, prompt string) []string {
+	if filepath.Base(path) == "claude" {
+		return []string{path, "--disallowedTools", "WebFetch,WebSearch", "--", prompt}
+	}
+	return []string{path, prompt}
 }
 
 func randToken() string {
@@ -352,6 +370,6 @@ My mail app is watching that file and shows each label on its row as soon as you
 Then give me a short summary: what needs me (most urgent first), and how many are worth a read or safe to skip. `+
 		`Ask before marking anything seen. Only when I approve a specific set, mark it with `+"`hey seen <box_item_id>...`"+` (many IDs per call). Never send, reply, delete, or move mail.`,
 		in, triagePath())
-	_, block, err := floatPane("Triage · New For You", paneCommand(path, prompt), rect{0.06, 0.05, 0.88, 0.88}, true)
+	_, block, err := floatPane("Triage · New For You", paneCommand(agentArgs(path, prompt)...), rect{0.06, 0.05, 0.88, 0.88}, true)
 	return block, err
 }

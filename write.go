@@ -35,6 +35,8 @@ func runWrite(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// These come from the message being answered, and are printed below.
+	*subject, *to = termSafe(*subject), termSafe(*to)
 	res := writeResult{Message: "Cancelled"}
 	defer func() {
 		if *token != "" {
@@ -50,7 +52,7 @@ func runWrite(args []string) error {
 		return strings.TrimSpace(line)
 	}
 
-	fmt.Printf("\x1b]2;%s\x07\x1b[H\x1b[2J", firstNonEmpty(*acct, "HEY"))
+	fmt.Printf("\x1b]2;%s\x07\x1b[H\x1b[2J", termSafe(firstNonEmpty(*acct, "HEY")))
 	if *reply != "" {
 		fmt.Printf("%sReply%s %sto %s%s\n%s%s%s\n\n", ansiBold+ansiBlue, ansiReset, ansiDim, *to, ansiReset, ansiBold, *subject, ansiReset)
 	} else {

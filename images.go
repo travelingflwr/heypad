@@ -91,11 +91,17 @@ type imageCache struct {
 
 func newImageCache(done func(src string)) *imageCache {
 	return &imageCache{
-		m:      map[string]*imgEntry{},
-		dir:    filepath.Join(stateDir(), "images"),
-		done:   done,
-		client: &http.Client{Timeout: 20 * time.Second},
-		slots:  make(chan struct{}, 4),
+		m:    map[string]*imgEntry{},
+		dir:  filepath.Join(stateDir(), "images"),
+		done: done,
+		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// A redirect mustn't lead to a server that isn't allowed.
+			if len(via) >= 5 || !remoteAllowed(req.URL) {
+				return errors.New("image: redirected somewhere heypad doesn't load from")
+			}
+			return nil
+		}},
+		slots: make(chan struct{}, 4),
 	}
 }
 
