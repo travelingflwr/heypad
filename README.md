@@ -145,6 +145,25 @@ Images in iCloud mail come straight from the sender's server, which would
 tell them you opened it, so heypad doesn't load them; images inside the
 message itself show.
 
+## On a Linux desktop
+
+On Linux with niri and DankMaterialShell, `heypad desktop-install` makes
+heypad the desktop's mail app. The window is still a Rex window.
+
+- **Top bar:** a mail icon with the new count. Click it to see what's new,
+  or right-click it to open mail. Enable it under DMS Settings → Plugins,
+  then add HEY to the bar.
+- **Notifications:** `heypad watch` runs as a systemd user service, checks
+  every `HEYPAD_REFRESH`, and notifies you of new mail. Click a notification
+  to open mail.
+- **Mod+Shift+M** opens mail, or focuses it if it's open. It floats at the
+  top right, under the bar icon. `--bind` picks another key.
+- **Launcher and links:** "HEY" appears in the app launcher, and `mailto:`
+  links open a new message.
+
+The pieces are in `desktop/`: the bar widget is QML and the rest is plain
+config. `desktop.go` is the code behind them.
+
 ## How it works
 
 - **The Imbox's sections come from HEY's own ordering.** New For You and
@@ -187,6 +206,8 @@ message itself show.
   different agent command.
 - What's new comes from HEY itself, so it matches HEY on the web and your
   phone. Opening a thread in heypad marks it seen in HEY, as HEY's apps do.
+- The open box refreshes every minute. Set `HEYPAD_REFRESH` to change it, as
+  a duration such as `30s` or `5m` (15 seconds at least). `R` refreshes now.
 
 ## Credits
 

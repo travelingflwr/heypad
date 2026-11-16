@@ -1,0 +1,14 @@
+// Written by `heypad desktop-install`; run it again to rewrite.
+binds {
+    @BIND@ hotkey-overlay-title="Mail (HEY)" { spawn "@HEYPAD@" "open"; }
+}
+
+// The mail window: the Rex Linux window showing the "heypad" session.
+// It floats at the top right, under the bar's mail icon.
+window-rule {
+    match app-id="^dev\\.shuv\\.rex-linux$" title="^heypad — "
+    open-floating true
+    default-column-width { fixed 1100; }
+    default-window-height { fixed 820; }
+    default-floating-position x=12 y=12 relative-to="top-right"
+}

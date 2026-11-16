@@ -29,6 +29,12 @@ Usage: heypad COMMAND [ARGS]
   render -o FILE.png [--box KIND] [--thread N] [--width PT] [--height PT] [--theme light|dark]
                              draw a screen to a PNG
   rex-install [--bind KEY]   write the Rex palette actions (~/.config/rex/heypad.lua)
+  desktop-install [--bind KEY]
+                             Linux: launcher entry, mailto handler, notifications,
+                             DankMaterialShell bar widget, niri key (Mod+Shift+M)
+  watch [--quiet]            check for new mail in the background and notify
+  status [--json|--refresh]  what watch last saw; --refresh checks now
+  open [mailto:ADDRESS]      focus or start the mail window, or write to ADDRESS
   account add icloud --user LOGIN [--from ADDRESS]
                              add an iCloud Mail account (see heypad account)
 
@@ -117,6 +123,14 @@ func run(args []string) error {
 		return runRender(args)
 	case "rex-install":
 		return runRexInstall(args)
+	case "watch":
+		return runWatch(args)
+	case "status":
+		return runStatus(args)
+	case "open":
+		return runOpen(args)
+	case "desktop-install":
+		return runDesktopInstall(args)
 	case "keys":
 		return runKeyTest()
 	case "snapshot":

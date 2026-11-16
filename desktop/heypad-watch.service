@@ -1,0 +1,13 @@
+[Unit]
+Description=heypad: check HEY for new mail, notify, and feed the top bar
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=@HEYPAD@ watch
+Environment=PATH=@PATH@
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=graphical-session.target

@@ -29,14 +29,13 @@ const (
 	enterScreen = "\x1b[?1049h\x1b[?25l\x1b[H\x1b[2J\x1b[?2031h\x1b[?1000h\x1b[?1006h\x1b[?1016h\x1b[?2004h\x1b[>1u"
 	leaveScreen = "\x1b_Ga=d,d=A,q=2\x1b\\\x1b[<u\x1b[?2004l\x1b[?1016l\x1b[?1006l\x1b[?1000l\x1b[?2031l\x1b[?25h\x1b[?1049l"
 
-	animFrame    = 8 * time.Millisecond
-	easeTau      = 45 * time.Millisecond
-	colorPoll    = 250 * time.Millisecond
-	colorSettle  = 30 * time.Millisecond
-	refreshEvery = 90 * time.Second
-	maxSheetPx   = 8192
-	lineStep     = 40.0 // points a line scroll moves the reader
-	introPt      = 22.0 // how far a thread rises as it opens
+	animFrame   = 8 * time.Millisecond
+	easeTau     = 45 * time.Millisecond
+	colorPoll   = 250 * time.Millisecond
+	colorSettle = 30 * time.Millisecond
+	maxSheetPx  = 8192
+	lineStep    = 40.0 // points a line scroll moves the reader
+	introPt     = 22.0 // how far a thread rises as it opens
 )
 
 type screenKind int
@@ -1240,7 +1239,7 @@ func runView(opt viewOptions) error {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	defer stopAnim()
-	refresh := time.NewTicker(refreshEvery)
+	refresh := time.NewTicker(refreshInterval())
 	defer refresh.Stop()
 	recolor := time.NewTicker(colorPoll)
 	defer recolor.Stop()
@@ -1433,4 +1432,14 @@ func runView(opt viewOptions) error {
 			return nil
 		}
 	}
+}
+
+// refreshInterval is how often the open box is fetched again: a minute, or
+// HEYPAD_REFRESH as a Go duration ("30s", "5m"), never under 15 seconds.
+func refreshInterval() time.Duration {
+	d, err := time.ParseDuration(os.Getenv("HEYPAD_REFRESH"))
+	if err != nil || d <= 0 {
+		return time.Minute
+	}
+	return max(d, 15*time.Second)
 }

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=HEY
+GenericName=Mail
+Comment=HEY mail in a Rex window
+Exec=@HEYPAD@ open %u
+TryExec=@HEYPAD@
+Icon=heypad
+Terminal=false
+Categories=Network;Email;
+Keywords=mail;email;hey;heypad;inbox;
+MimeType=x-scheme-handler/mailto;
+StartupNotify=false

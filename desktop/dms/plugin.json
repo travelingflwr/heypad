@@ -1,0 +1,13 @@
+{
+    "id": "heypad",
+    "name": "HEY",
+    "description": "New HEY mail in the bar, from heypad. Click for what's new; open it in heypad's Rex window.",
+    "version": "0.1.0",
+    "author": "Amy D (Travelingflwr)",
+    "icon": "mail",
+    "type": "widget",
+    "capabilities": ["dankbar-widget"],
+    "component": "./HeyWidget.qml",
+    "requires": ["heypad"],
+    "permissions": ["process"]
+}
