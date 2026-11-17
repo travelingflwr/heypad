@@ -18,6 +18,7 @@ package main
 // what's wired up; on a Mac, the Rex palette (⌘⇧M) does this job.
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -179,7 +180,12 @@ func notify(title, body string) {
 		script := fmt.Sprintf("display notification %q with title \"HEY\" subtitle %q", body, title)
 		exec.Command("osascript", "-e", script).Run()
 	default:
-		out, err := exec.Command("notify-send", "--app-name=HEY", "--icon=heypad",
+		// Wait for a click for a while, not forever: some notification
+		// servers never say a notification closed, which would leave one
+		// notify-send per email running.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "notify-send", "--app-name=HEY", "--icon=heypad",
 			"--hint=string:desktop-entry:heypad", "--action=default=Open", "--wait",
 			title, body).Output()
 		if err == nil && strings.TrimSpace(string(out)) == "default" {
